@@ -2285,80 +2285,52 @@ async function tg(env, method, body){
   return data;
 }
 
-// Main controls live in Telegram's input area instead of as inline message buttons.
-function replyKeyboard(){
-  return {
-    keyboard:[
-      [{text:'/start'},{text:'🖕 СГЕНЕРИРОВАТЬ'}],
-      [{text:'⚙️ НАСТРОЙКИ'},{text:'👤 ИМЯ'}],
-      [{text:'🧹 УБРАТЬ ИМЯ'},{text:'/help'}]
-    ],
-    resize_keyboard:true,
-    is_persistent:true,
-    input_field_placeholder:'Выбери действие или введи команду'
-  };
+// Telegram reply-keyboard menus. All controls stay in the input area.
+function mainReplyKeyboard(){
+  return {keyboard:[
+    [{text:'/start'},{text:'🖕 СГЕНЕРИРОВАТЬ'}],
+    [{text:'⚙️ НАСТРОЙКИ'},{text:'👤 КОГО ОБМАТЕРИТЬ'}],
+    [{text:'🧹 УБРАТЬ ЦЕЛЬ'},{text:'/help'}]
+  ],resize_keyboard:true,is_persistent:true,input_field_placeholder:'Выбери действие или введи команду'};
 }
-
-function keyboard(s){
-  return {inline_keyboard:[
-    [{text:`Режим: ${s.mode}`,callback_data:'mode'}],
-    [{text:`Количество: ${s.count}`,callback_data:'count'}],
-    [{text:`Разнообразие: ${s.diversity}%`,callback_data:'diversity'}],
-    [{text:`Составные: ${s.compoundMode?'ВКЛ':'ВЫКЛ'}`,callback_data:'compound'}],
-    [{text:`Имя: ${s.targetWord||'не задано'}`,callback_data:'name'}],
-    [{text:'СГЕНЕРИРОВАТЬ',callback_data:'generate'}]
-  ]};
+function settingsReplyKeyboard(s){
+  return {keyboard:[
+    [{text:`🎛 РЕЖИМ: ${s.mode}`}],
+    [{text:`🔢 КОЛИЧЕСТВО: ${s.count}`}],
+    [{text:`🌈 РАЗНООБРАЗИЕ: ${s.diversity}%`}],
+    [{text:`🧩 СОСТАВНЫЕ: ${s.compoundMode?'ВКЛ':'ВЫКЛ'}`}],
+    [{text:`👤 КОГО ОБМАТЕРИТЬ: ${s.targetWord||'не задано'}`}],
+    [{text:'◀️ НАЗАД'},{text:'🖕 СГЕНЕРИРОВАТЬ'}]
+  ],resize_keyboard:true,is_persistent:true,input_field_placeholder:'Выбери параметр'};
 }
+function modeReplyKeyboard(){return {keyboard:[
+  [{text:'♂️ Мужской'},{text:'♀️ Женский'}],
+  [{text:'⚖️ Смешанный'},{text:'☠️ Хаос'}],
+  [{text:'◀️ НАЗАД'}]
+],resize_keyboard:true,is_persistent:true,input_field_placeholder:'Выбери режим'};}
+function countReplyKeyboard(){return {keyboard:[
+  [{text:'1'},{text:'5'},{text:'10'}],
+  [{text:'20'},{text:'50'},{text:'100'}],
+  [{text:'◀️ НАЗАД'}]
+],resize_keyboard:true,is_persistent:true,input_field_placeholder:'Выбери количество'};}
+function diversityReplyKeyboard(){return {keyboard:[
+  [{text:'0%'},{text:'25%'},{text:'50%'}],
+  [{text:'75%'},{text:'100%'}],
+  [{text:'◀️ НАЗАД'}]
+],resize_keyboard:true,is_persistent:true,input_field_placeholder:'Выбери разнообразие'};}
+function replyKeyboard(){ return mainReplyKeyboard(); }
 
-function modeKeyboard(){return {inline_keyboard:[
-  [{text:'Мужской',callback_data:'setmode:male'},{text:'Женский',callback_data:'setmode:female'}],
-  [{text:'Смешанный',callback_data:'setmode:mixed'},{text:'Хаос',callback_data:'setmode:chaos'}],
-  [{text:'Назад',callback_data:'settings'}]
-]};}
-function countKeyboard(){return {inline_keyboard:[
-  [{text:'1',callback_data:'setcount:1'},{text:'5',callback_data:'setcount:5'},{text:'10',callback_data:'setcount:10'}],
-  [{text:'20',callback_data:'setcount:20'},{text:'50',callback_data:'setcount:50'},{text:'100',callback_data:'setcount:100'}],
-  [{text:'Назад',callback_data:'settings'}]
-]};}
-function diversityKeyboard(){return {inline_keyboard:[
-  [{text:'0%',callback_data:'setdiv:0'},{text:'25%',callback_data:'setdiv:25'},{text:'50%',callback_data:'setdiv:50'}],
-  [{text:'75%',callback_data:'setdiv:75'},{text:'100%',callback_data:'setdiv:100'}],
-  [{text:'Назад',callback_data:'settings'}]
-]};}
-
-function helpText(){return `Генератор Мата 0.922\n\n/start — главное меню\n/generate — сгенерировать\n/settings — настройки\n/help — помощь\n\nКнопка «ИМЯ» задаёт слово/имя, которое будет добавляться в генерацию. Настройки сохраняются между перезапусками Worker при подключённом KV.`;}
-
-let botMenuReady=false;
-async function setupBotMenu(env){
-  if(botMenuReady) return;
-  await tg(env,'setMyCommands',{commands:[
-    {command:'start',description:'Открыть главное меню'},
-    {command:'generate',description:'Сгенерировать'},
-    {command:'settings',description:'Настройки'},
-    {command:'help',description:'Помощь'}
-  ]});
-  await tg(env,'setMyDescription',{description:'Генератор Мата 0.922. Нажми /start, чтобы открыть меню и начать работу.'});
-  botMenuReady=true;
-}
+function keyboard(s){ return settingsReplyKeyboard(s); }
 
 async function sendMenu(env,chatId,extra=''){
   const s=await settingsFor(env,chatId);
   const name=s.targetWord||'не задано';
-  return tg(env,'sendMessage',{chat_id:chatId,text:`Генератор Мата 0.922\n\nРежим: ${s.mode}\nФраз: ${s.count}\nРазнообразие: ${s.diversity}%\nСоставные: ${s.compoundMode?'включены':'выключены'}\nИмя: ${name}${extra?'\n\n'+extra:''}`,reply_markup:replyKeyboard()});
+  return tg(env,'sendMessage',{chat_id:chatId,text:`Генератор Мата 0.922\n\nРежим: ${s.mode}\nФраз: ${s.count}\nРазнообразие: ${s.diversity}%\nСоставные: ${s.compoundMode?'включены':'выключены'}\nИмя: ${name}${extra?'\n\n'+extra:''}`,reply_markup:mainReplyKeyboard()});
 }
 
-async function generateFor(env,chatId,countOverride){
+async function sendSettingsMenu(env,chatId,extra=''){
   const s=await settingsFor(env,chatId);
-  const count=Math.max(1,Math.min(100,Number(countOverride)||s.count));
-  try{
-    setSettings({diversity:s.diversity,compoundMode:s.compoundMode,length:s.length,targetWord:s.targetWord});
-    const out=generateBatch({count,mode:s.mode,diversity:s.diversity,compoundMode:s.compoundMode,length:s.length,targetWord:s.targetWord});
-    const text=out.map((x,i)=>`${i+1}. ${x}`).join('\n');
-    return tg(env,'sendMessage',{chat_id:chatId,text:text.slice(0,3900),reply_markup:replyKeyboard()});
-  }catch(e){
-    console.error('generation error',e);
-    return tg(env,'sendMessage',{chat_id:chatId,text:`Ошибка генерации: ${e?.message||e}`,reply_markup:replyKeyboard()});
-  }
+  return tg(env,'sendMessage',{chat_id:chatId,text:`Настройки\n\nРежим: ${s.mode}\nФраз: ${s.count}\nРазнообразие: ${s.diversity}%\nСоставные: ${s.compoundMode?'включены':'выключены'}\nИмя: ${s.targetWord||'не задано'}${extra?'\n\n'+extra:''}`,reply_markup:settingsReplyKeyboard(s)});
 }
 
 async function generateTextFor(env,chatId){
@@ -2377,7 +2349,7 @@ async function askName(env,chatId){
   const s=await settingsFor(env,chatId);
   s.awaitingTarget=true;
   await saveSettings(env,chatId,s);
-  return tg(env,'sendMessage',{chat_id:chatId,text:'Введи имя или слово, которое нужно использовать в генерации.\n\nНапример: Вадим\n\nДля отмены нажми /start.',reply_markup:replyKeyboard()});
+  return tg(env,'sendMessage',{chat_id:chatId,text:'Введи имя или слово того, кого нужно обматерить.\n\nНапример: Вадим\n\nДля отмены нажми /start.',reply_markup:replyKeyboard()});
 }
 
 async function clearName(env,chatId){
@@ -2388,24 +2360,21 @@ async function clearName(env,chatId){
 }
 
 async function handleUpdate(update,env){
-  // Keep Telegram's command menu/description configured automatically.
   try{ await setupBotMenu(env); }catch(e){ console.error('Bot menu setup error:',e?.stack||e); }
 
   if(update.callback_query){
+    // Backward compatibility with any old inline-button message still in the chat.
     const q=update.callback_query; const chatId=q.message?.chat?.id;
     if(!chatId) return;
     await tg(env,'answerCallbackQuery',{callback_query_id:q.id});
     const s=await settingsFor(env,chatId); const d=q.data||'';
-    if(d==='settings') return sendMenu(env,chatId);
+    if(d==='settings') return sendSettingsMenu(env,chatId);
     if(d==='name') return askName(env,chatId);
-    if(d==='mode') return tg(env,'editMessageText',{chat_id:chatId,message_id:q.message.message_id,text:'Выбери режим:',reply_markup:modeKeyboard()});
-    if(d==='count') return tg(env,'editMessageText',{chat_id:chatId,message_id:q.message.message_id,text:'Количество фраз:',reply_markup:countKeyboard()});
-    if(d==='diversity') return tg(env,'editMessageText',{chat_id:chatId,message_id:q.message.message_id,text:'Разнообразие:',reply_markup:diversityKeyboard()});
-    if(d==='compound'){s.compoundMode=!s.compoundMode; await saveSettings(env,chatId,s); return sendMenu(env,chatId);}
+    if(d==='compound'){s.compoundMode=!s.compoundMode; await saveSettings(env,chatId,s); return sendSettingsMenu(env,chatId);}
     if(d==='generate') return generateFor(env,chatId);
-    if(d.startsWith('setmode:')){s.mode=d.slice(8); await saveSettings(env,chatId,s); return sendMenu(env,chatId);}
-    if(d.startsWith('setcount:')){s.count=Number(d.slice(9))||5; await saveSettings(env,chatId,s); return sendMenu(env,chatId);}
-    if(d.startsWith('setdiv:')){s.diversity=Number(d.slice(7))||0; await saveSettings(env,chatId,s); return sendMenu(env,chatId);}
+    if(d.startsWith('setmode:')){s.mode=d.slice(8); await saveSettings(env,chatId,s); return sendSettingsMenu(env,chatId);}
+    if(d.startsWith('setcount:')){s.count=Math.max(1,Math.min(100,Number(d.slice(9))||5)); await saveSettings(env,chatId,s); return sendSettingsMenu(env,chatId);}
+    if(d.startsWith('setdiv:')){s.diversity=Math.max(0,Math.min(100,Number(d.slice(7))||0)); await saveSettings(env,chatId,s); return sendSettingsMenu(env,chatId);}
     return;
   }
 
@@ -2413,26 +2382,43 @@ async function handleUpdate(update,env){
   const chatId=m.chat.id; const text=String(m.text||'').trim();
   const s=await settingsFor(env,chatId);
 
+  if(s.awaitingTarget && text && !text.startsWith('/')){
+    s.targetWord=text.slice(0,100); s.awaitingTarget=false;
+    await saveSettings(env,chatId,s);
+    return sendSettingsMenu(env,chatId,`Имя установлено: ${s.targetWord}`);
+  }
+
   if(text==='/start') return sendMenu(env,chatId,'Выбери действие кнопками внизу.');
-  if(text==='/help') return tg(env,'sendMessage',{chat_id:chatId,text:helpText(),reply_markup:replyKeyboard()});
-  if(text==='/settings' || text==='⚙️ НАСТРОЙКИ') return sendMenu(env,chatId);
+  if(text==='/help') return tg(env,'sendMessage',{chat_id:chatId,text:helpText(),reply_markup:mainReplyKeyboard()});
+  if(text==='/settings' || text==='⚙️ НАСТРОЙКИ') return sendSettingsMenu(env,chatId);
   if(text==='/generate' || text==='🖕 СГЕНЕРИРОВАТЬ') return generateFor(env,chatId);
-  if(text==='👤 ИМЯ') return askName(env,chatId);
-  if(text==='🧹 УБРАТЬ ИМЯ') return clearName(env,chatId);
+  if(text==='👤 КОГО ОБМАТЕРИТЬ' || text.startsWith('👤 КОГО ОБМАТЕРИТЬ:')) return askName(env,chatId);
+  if(text==='🧹 УБРАТЬ ЦЕЛЬ') return clearName(env,chatId);
+  if(text==='◀️ НАЗАД') return sendMenu(env,chatId);
+
+  if(text==='🎛 РЕЖИМ: '+s.mode || text==='🎛 РЕЖИМ:') return tg(env,'sendMessage',{chat_id:chatId,text:'Выбери режим:',reply_markup:modeReplyKeyboard()});
+  if(text.startsWith('🎛 РЕЖИМ:')) return tg(env,'sendMessage',{chat_id:chatId,text:'Выбери режим:',reply_markup:modeReplyKeyboard()});
+  if(text.startsWith('🔢 КОЛИЧЕСТВО:')) return tg(env,'sendMessage',{chat_id:chatId,text:'Выбери количество фраз:',reply_markup:countReplyKeyboard()});
+  if(text.startsWith('🌈 РАЗНООБРАЗИЕ:')) return tg(env,'sendMessage',{chat_id:chatId,text:'Выбери разнообразие:',reply_markup:diversityReplyKeyboard()});
+  if(text.startsWith('🧩 СОСТАВНЫЕ:')){
+    s.compoundMode=!s.compoundMode; await saveSettings(env,chatId,s); return sendSettingsMenu(env,chatId);
+  }
+
+  if(['♂️ Мужской','♀️ Женский','⚖️ Смешанный','☠️ Хаос'].includes(text)){
+    s.mode={'♂️ Мужской':'male','♀️ Женский':'female','⚖️ Смешанный':'mixed','☠️ Хаос':'chaos'}[text];
+    await saveSettings(env,chatId,s); return sendSettingsMenu(env,chatId);
+  }
+  if(['1','5','10','20','50','100'].includes(text)){
+    s.count=Number(text); await saveSettings(env,chatId,s); return sendSettingsMenu(env,chatId);
+  }
+  if(['0%','25%','50%','75%','100%'].includes(text)){
+    s.diversity=Number(text.slice(0,-1)); await saveSettings(env,chatId,s); return sendSettingsMenu(env,chatId);
+  }
+
   if(text.startsWith('/generate')){
     const n=text.split(/\s+/)[1]; return generateFor(env,chatId,n);
   }
-
-  if(s.awaitingTarget){
-    if(text){
-      s.targetWord=text.slice(0,100);
-      s.awaitingTarget=false;
-      await saveSettings(env,chatId,s);
-      return sendMenu(env,chatId,`Имя сохранено: ${s.targetWord}`);
-    }
-  }
-
-  return tg(env,'sendMessage',{chat_id:chatId,text:'Привет. Нажми /start, чтобы открыть меню.',reply_markup:replyKeyboard()});
+  return tg(env,'sendMessage',{chat_id:chatId,text:'Нажми /start, чтобы открыть меню.',reply_markup:mainReplyKeyboard()});
 }
 
 export default {
