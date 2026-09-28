@@ -2228,29 +2228,54 @@ export { DB, runtimeSettings, generateBatch, generateText, makePhrase };
 export function setSettings(options={}){ Object.assign(runtimeSettings, options); return runtimeSettings; }
 
 // ===== Telegram / Cloudflare Workers adapter =====
+// Settings are persisted in Cloudflare KV when BOT_SETTINGS is bound.
+// Without KV the in-memory fallback still works, but settings can reset on cold starts.
 const userSettings = new Map();
+const DEFAULT_SETTINGS = {
+  mode:'mixed', count:5, diversity:50, compoundMode:true,
+  length:'random', targetWord:'', awaitingTarget:false
+};
 
-function settingsFor(chatId){
+function defaultSettings(){ return {...DEFAULT_SETTINGS}; }
+
+async function settingsFor(env,chatId){
   const id=String(chatId);
-  if(!userSettings.has(id)) userSettings.set(id,{mode:'mixed',count:5,diversity:50,compoundMode:true,length:'random',targetWord:''});
-  return userSettings.get(id);
+  if(userSettings.has(id)) return userSettings.get(id);
+  if(env.BOT_SETTINGS){
+    try{
+      const saved=await env.BOT_SETTINGS.get(`settings:${id}`,'json');
+      if(saved){
+        const s={...defaultSettings(),...saved};
+        userSettings.set(id,s);
+        return s;
+      }
+    }catch(e){ console.error('KV read error:',e?.stack||e); }
+  }
+  const s=defaultSettings();
+  userSettings.set(id,s);
+  return s;
+}
+
+async function saveSettings(env,chatId,s){
+  const id=String(chatId);
+  userSettings.set(id,s);
+  if(env.BOT_SETTINGS){
+    try{ await env.BOT_SETTINGS.put(`settings:${id}`,JSON.stringify(s)); }
+    catch(e){ console.error('KV write error:',e?.stack||e); }
+  }
+  return s;
 }
 
 async function tg(env, method, body){
   const token=String(env.BOT_TOKEN||'').trim();
   if(!token) throw new Error('BOT_TOKEN is not configured');
-
   const r=await fetch(`https://api.telegram.org/bot${token}/${method}`,{
-    method:'POST',
-    headers:{'content-type':'application/json'},
-    body:JSON.stringify(body)
+    method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)
   });
-
   const raw=await r.text();
   let data;
   try{ data=JSON.parse(raw); }
   catch(_){ throw new Error(`Telegram ${method}: HTTP ${r.status}, invalid JSON response`); }
-
   if(!r.ok || data?.ok!==true){
     const code=data?.error_code ?? r.status;
     const desc=data?.description || 'unknown Telegram API error';
@@ -2260,12 +2285,27 @@ async function tg(env, method, body){
   return data;
 }
 
+// Main controls live in Telegram's input area instead of as inline message buttons.
+function replyKeyboard(){
+  return {
+    keyboard:[
+      [{text:'/start'},{text:'🖕 СГЕНЕРИРОВАТЬ'}],
+      [{text:'⚙️ НАСТРОЙКИ'},{text:'👤 ИМЯ'}],
+      [{text:'🧹 УБРАТЬ ИМЯ'},{text:'/help'}]
+    ],
+    resize_keyboard:true,
+    is_persistent:true,
+    input_field_placeholder:'Выбери действие или введи команду'
+  };
+}
+
 function keyboard(s){
   return {inline_keyboard:[
     [{text:`Режим: ${s.mode}`,callback_data:'mode'}],
     [{text:`Количество: ${s.count}`,callback_data:'count'}],
     [{text:`Разнообразие: ${s.diversity}%`,callback_data:'diversity'}],
     [{text:`Составные: ${s.compoundMode?'ВКЛ':'ВЫКЛ'}`,callback_data:'compound'}],
+    [{text:`Имя: ${s.targetWord||'не задано'}`,callback_data:'name'}],
     [{text:'СГЕНЕРИРОВАТЬ',callback_data:'generate'}]
   ]};
 }
@@ -2286,65 +2326,113 @@ function diversityKeyboard(){return {inline_keyboard:[
   [{text:'Назад',callback_data:'settings'}]
 ]};}
 
-function helpText(){return `Генератор Мата 0.922\n\n/start — главное меню\n/generate — сгенерировать\n/settings — настройки\n/help — помощь\n\nМожно написать /generate 10 для 10 фраз. На бесплатном Cloudflare Worker одна команда ограничена 10 фразами.`;}
+function helpText(){return `Генератор Мата 0.922\n\n/start — главное меню\n/generate — сгенерировать\n/settings — настройки\n/help — помощь\n\nКнопка «ИМЯ» задаёт слово/имя, которое будет добавляться в генерацию. Настройки сохраняются между перезапусками Worker при подключённом KV.`;}
 
-async function sendMenu(env,chatId){
-  const s=settingsFor(chatId);
-  return tg(env,'sendMessage',{chat_id:chatId,text:`Генератор Мата 0.922\n\nРежим: ${s.mode}\nФраз: ${s.count}\nРазнообразие: ${s.diversity}%\nСоставные: ${s.compoundMode?'включены':'выключены'}` ,reply_markup:keyboard(s)});
+let botMenuReady=false;
+async function setupBotMenu(env){
+  if(botMenuReady) return;
+  await tg(env,'setMyCommands',{commands:[
+    {command:'start',description:'Открыть главное меню'},
+    {command:'generate',description:'Сгенерировать'},
+    {command:'settings',description:'Настройки'},
+    {command:'help',description:'Помощь'}
+  ]});
+  await tg(env,'setMyDescription',{description:'Генератор Мата 0.922. Нажми /start, чтобы открыть меню и начать работу.'});
+  botMenuReady=true;
+}
+
+async function sendMenu(env,chatId,extra=''){
+  const s=await settingsFor(env,chatId);
+  const name=s.targetWord||'не задано';
+  return tg(env,'sendMessage',{chat_id:chatId,text:`Генератор Мата 0.922\n\nРежим: ${s.mode}\nФраз: ${s.count}\nРазнообразие: ${s.diversity}%\nСоставные: ${s.compoundMode?'включены':'выключены'}\nИмя: ${name}${extra?'\n\n'+extra:''}`,reply_markup:replyKeyboard()});
 }
 
 async function generateFor(env,chatId,countOverride){
-  const s=settingsFor(chatId);
-  const count=Math.max(1,Math.min(10,Number(countOverride)||s.count));
+  const s=await settingsFor(env,chatId);
+  const count=Math.max(1,Math.min(100,Number(countOverride)||s.count));
   try{
     setSettings({diversity:s.diversity,compoundMode:s.compoundMode,length:s.length,targetWord:s.targetWord});
     const out=generateBatch({count,mode:s.mode,diversity:s.diversity,compoundMode:s.compoundMode,length:s.length,targetWord:s.targetWord});
     const text=out.map((x,i)=>`${i+1}. ${x}`).join('\n');
-    return tg(env,'sendMessage',{chat_id:chatId,text:text.slice(0,3900)});
+    return tg(env,'sendMessage',{chat_id:chatId,text:text.slice(0,3900),reply_markup:replyKeyboard()});
   }catch(e){
     console.error('generation error',e);
-    return tg(env,'sendMessage',{chat_id:chatId,text:`Ошибка генерации: ${e?.message||e}`});
+    return tg(env,'sendMessage',{chat_id:chatId,text:`Ошибка генерации: ${e?.message||e}`,reply_markup:replyKeyboard()});
   }
 }
 
 async function generateTextFor(env,chatId){
-  const s=settingsFor(chatId);
+  const s=await settingsFor(env,chatId);
   try{
     setSettings({diversity:s.diversity,compoundMode:s.compoundMode,textGender:s.mode});
     const text=generateText({words:500,gender:s.mode,paragraphs:'one',targetFreq:'rare'});
-    return tg(env,'sendMessage',{chat_id:chatId,text:String(text).slice(0,3900)});
+    return tg(env,'sendMessage',{chat_id:chatId,text:String(text).slice(0,3900),reply_markup:replyKeyboard()});
   }catch(e){
     console.error('text generation error',e);
-    return tg(env,'sendMessage',{chat_id:chatId,text:`Ошибка генерации текста: ${e?.message||e}`});
+    return tg(env,'sendMessage',{chat_id:chatId,text:`Ошибка генерации текста: ${e?.message||e}`,reply_markup:replyKeyboard()});
   }
 }
 
+async function askName(env,chatId){
+  const s=await settingsFor(env,chatId);
+  s.awaitingTarget=true;
+  await saveSettings(env,chatId,s);
+  return tg(env,'sendMessage',{chat_id:chatId,text:'Введи имя или слово, которое нужно использовать в генерации.\n\nНапример: Вадим\n\nДля отмены нажми /start.',reply_markup:replyKeyboard()});
+}
+
+async function clearName(env,chatId){
+  const s=await settingsFor(env,chatId);
+  s.targetWord=''; s.awaitingTarget=false;
+  await saveSettings(env,chatId,s);
+  return sendMenu(env,chatId,'Имя удалено.');
+}
+
 async function handleUpdate(update,env){
+  // Keep Telegram's command menu/description configured automatically.
+  try{ await setupBotMenu(env); }catch(e){ console.error('Bot menu setup error:',e?.stack||e); }
+
   if(update.callback_query){
     const q=update.callback_query; const chatId=q.message?.chat?.id;
     if(!chatId) return;
     await tg(env,'answerCallbackQuery',{callback_query_id:q.id});
-    const s=settingsFor(chatId); const d=q.data||'';
+    const s=await settingsFor(env,chatId); const d=q.data||'';
     if(d==='settings') return sendMenu(env,chatId);
+    if(d==='name') return askName(env,chatId);
     if(d==='mode') return tg(env,'editMessageText',{chat_id:chatId,message_id:q.message.message_id,text:'Выбери режим:',reply_markup:modeKeyboard()});
     if(d==='count') return tg(env,'editMessageText',{chat_id:chatId,message_id:q.message.message_id,text:'Количество фраз:',reply_markup:countKeyboard()});
     if(d==='diversity') return tg(env,'editMessageText',{chat_id:chatId,message_id:q.message.message_id,text:'Разнообразие:',reply_markup:diversityKeyboard()});
-    if(d==='compound'){s.compoundMode=!s.compoundMode; return sendMenu(env,chatId);}
+    if(d==='compound'){s.compoundMode=!s.compoundMode; await saveSettings(env,chatId,s); return sendMenu(env,chatId);}
     if(d==='generate') return generateFor(env,chatId);
-        if(d.startsWith('setmode:')){s.mode=d.slice(8); return sendMenu(env,chatId);}
-    if(d.startsWith('setcount:')){s.count=Number(d.slice(9))||5; return sendMenu(env,chatId);}
-    if(d.startsWith('setdiv:')){s.diversity=Number(d.slice(7))||0; return sendMenu(env,chatId);}
+    if(d.startsWith('setmode:')){s.mode=d.slice(8); await saveSettings(env,chatId,s); return sendMenu(env,chatId);}
+    if(d.startsWith('setcount:')){s.count=Number(d.slice(9))||5; await saveSettings(env,chatId,s); return sendMenu(env,chatId);}
+    if(d.startsWith('setdiv:')){s.diversity=Number(d.slice(7))||0; await saveSettings(env,chatId,s); return sendMenu(env,chatId);}
     return;
   }
+
   const m=update.message; if(!m||!m.chat) return;
   const chatId=m.chat.id; const text=String(m.text||'').trim();
-  if(text==='/start') return sendMenu(env,chatId);
-  if(text==='/help') return tg(env,'sendMessage',{chat_id:chatId,text:helpText()});
-  if(text==='/settings') return sendMenu(env,chatId);
+  const s=await settingsFor(env,chatId);
+
+  if(text==='/start') return sendMenu(env,chatId,'Выбери действие кнопками внизу.');
+  if(text==='/help') return tg(env,'sendMessage',{chat_id:chatId,text:helpText(),reply_markup:replyKeyboard()});
+  if(text==='/settings' || text==='⚙️ НАСТРОЙКИ') return sendMenu(env,chatId);
+  if(text==='/generate' || text==='🖕 СГЕНЕРИРОВАТЬ') return generateFor(env,chatId);
+  if(text==='👤 ИМЯ') return askName(env,chatId);
+  if(text==='🧹 УБРАТЬ ИМЯ') return clearName(env,chatId);
   if(text.startsWith('/generate')){
     const n=text.split(/\s+/)[1]; return generateFor(env,chatId,n);
   }
-  return tg(env,'sendMessage',{chat_id:chatId,text:'Используй /start или /generate.',reply_markup:keyboard(settingsFor(chatId))});
+
+  if(s.awaitingTarget){
+    if(text){
+      s.targetWord=text.slice(0,100);
+      s.awaitingTarget=false;
+      await saveSettings(env,chatId,s);
+      return sendMenu(env,chatId,`Имя сохранено: ${s.targetWord}`);
+    }
+  }
+
+  return tg(env,'sendMessage',{chat_id:chatId,text:'Привет. Нажми /start, чтобы открыть меню.',reply_markup:replyKeyboard()});
 }
 
 export default {
@@ -2364,4 +2452,3 @@ export default {
     }
   }
 };
-
