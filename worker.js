@@ -2247,30 +2247,36 @@ function defaultSettings(){ return {...DEFAULT_SETTINGS}; }
 async function settingsFor(env,chatId){
   const id=String(chatId);
   if(userSettings.has(id)) return userSettings.get(id);
-  if(!env.BOT_SETTINGS) throw new Error('BOT_SETTINGS KV binding is not configured');
-  try{
-    const saved=await env.BOT_SETTINGS.get(`settings:${id}`,'json');
-    const s={...defaultSettings(),...(saved&&typeof saved==='object'?saved:{})};
-    userSettings.set(id,s);
-    return s;
-  }catch(e){
-    console.error('KV read error:',e?.stack||e);
-    throw new Error(`Не удалось прочитать настройки: ${e?.message||e}`);
+  let saved=null;
+  if(env.BOT_SETTINGS){
+    try{
+      saved=await env.BOT_SETTINGS.get(`settings:${id}`,'json');
+    }catch(e){
+      console.error('KV read error; using in-memory fallback:',e?.stack||e);
+    }
+  }else{
+    console.error('BOT_SETTINGS KV binding is not configured; using in-memory fallback');
   }
+  const s={...defaultSettings(),...(saved&&typeof saved==='object'?saved:{})};
+  userSettings.set(id,s);
+  return s;
 }
 
 async function saveSettings(env,chatId,s){
   const id=String(chatId);
-  if(!env.BOT_SETTINGS) throw new Error('BOT_SETTINGS KV binding is not configured');
   const clean={...defaultSettings(),...s};
-  try{
-    await env.BOT_SETTINGS.put(`settings:${id}`,JSON.stringify(clean));
-    userSettings.set(id,clean);
-    return clean;
-  }catch(e){
-    console.error('KV write error:',e?.stack||e);
-    throw new Error(`Не удалось сохранить настройки: ${e?.message||e}`);
+  // Update the live state first so a KV problem never kills the bot.
+  userSettings.set(id,clean);
+  if(env.BOT_SETTINGS){
+    try{
+      await env.BOT_SETTINGS.put(`settings:${id}`,JSON.stringify(clean));
+    }catch(e){
+      console.error('KV write error; keeping in-memory settings:',e?.stack||e);
+    }
+  }else{
+    console.error('BOT_SETTINGS KV binding is not configured; settings are temporary');
   }
+  return clean;
 }
 
 async function tg(env, method, body){
