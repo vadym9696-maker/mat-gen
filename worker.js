@@ -2237,10 +2237,27 @@ function settingsFor(chatId){
 }
 
 async function tg(env, method, body){
-  const r=await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/${method}`,{
-    method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)
+  const token=String(env.BOT_TOKEN||'').trim();
+  if(!token) throw new Error('BOT_TOKEN is not configured');
+
+  const r=await fetch(`https://api.telegram.org/bot${token}/${method}`,{
+    method:'POST',
+    headers:{'content-type':'application/json'},
+    body:JSON.stringify(body)
   });
-  return r.json();
+
+  const raw=await r.text();
+  let data;
+  try{ data=JSON.parse(raw); }
+  catch(_){ throw new Error(`Telegram ${method}: HTTP ${r.status}, invalid JSON response`); }
+
+  if(!r.ok || data?.ok!==true){
+    const code=data?.error_code ?? r.status;
+    const desc=data?.description || 'unknown Telegram API error';
+    console.error(`Telegram API error in ${method}: ${code} ${desc}`);
+    throw new Error(`Telegram API ${method}: ${code} ${desc}`);
+  }
+  return data;
 }
 
 function keyboard(s){
@@ -2342,8 +2359,8 @@ export default {
       await handleUpdate(update,env);
       return new Response('OK');
     }catch(e){
-      console.error(e);
-      return new Response('Bad Request',{status:400});
+      console.error('Telegram webhook error:',e?.stack||e);
+      return new Response('Webhook error',{status:500});
     }
   }
 };
