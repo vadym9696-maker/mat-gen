@@ -2152,7 +2152,13 @@ function phrase(batchCtx){
 let results=[];
 
 function generateText(options={}){
-  if(options && typeof options==='object') Object.assign(runtimeSettings, options);
+  if(options && typeof options==='object'){
+    Object.assign(runtimeSettings, options);
+    if(options.words != null) runtimeSettings.textWords=options.words;
+    if(options.gender != null) runtimeSettings.textGender=options.gender;
+    if(options.paragraphs != null) runtimeSettings.textParagraphs=options.paragraphs;
+    if(options.targetFreq != null) runtimeSettings.textTargetFreq=options.targetFreq;
+  }
   const wordsTarget=Math.max(50,Math.min(5000,Math.floor(Number(runtimeSettings.textWords))||500));
   const freq=runtimeSettings.textTargetFreq;
   const textGender=runtimeSettings.textGender;
@@ -2357,6 +2363,72 @@ async function clearName(env,chatId){
   s.targetWord=''; s.awaitingTarget=false;
   await saveSettings(env,chatId,s);
   return sendMenu(env,chatId,'Имя удалено.');
+}
+
+function helpText(){
+  return `Генератор Мата 0.922\n\n/start — открыть главное меню\n/generate — сгенерировать\n/generate 10 — сгенерировать указанное количество\n/settings — настройки\n/help — помощь`;
+}
+
+async function setupBotMenu(env){
+  await tg(env,'setMyCommands',{commands:[
+    {command:'start',description:'Открыть главное меню'},
+    {command:'generate',description:'Сгенерировать'},
+    {command:'settings',description:'Настройки'},
+    {command:'help',description:'Помощь'}
+  ]});
+  await tg(env,'setMyDescription',{description:'Генератор Мата 0.922. Нажми /start, чтобы открыть меню и начать работу.'});
+}
+
+function splitTelegramText(text,max=3900){
+  const out=[];
+  let rest=String(text||'');
+  while(rest.length>max){
+    let cut=rest.lastIndexOf('\\n',max);
+    if(cut<500) cut=rest.lastIndexOf(' ',max);
+    if(cut<500) cut=max;
+    out.push(rest.slice(0,cut));
+    rest=rest.slice(cut).replace(/^\\s+/,'');
+  }
+  if(rest) out.push(rest);
+  return out;
+}
+
+async function generateFor(env,chatId,countOverride){
+  const s=await settingsFor(env,chatId);
+  const count=Math.max(1,Math.min(100,Number(countOverride)||s.count));
+  try{
+    setSettings({
+      diversity:s.diversity,
+      compoundMode:s.compoundMode,
+      length:s.length,
+      targetWord:s.targetWord
+    });
+
+    const out=generateBatch({
+      count,
+      mode:s.mode,
+      diversity:s.diversity,
+      compoundMode:s.compoundMode,
+      length:s.length,
+      targetWord:s.targetWord
+    });
+
+    const text=out.map((x,i)=>`${i+1}. ${x}`).join('\\n');
+    for(const chunk of splitTelegramText(text)){
+      await tg(env,'sendMessage',{
+        chat_id:chatId,
+        text:chunk,
+        reply_markup:mainReplyKeyboard()
+      });
+    }
+  }catch(e){
+    console.error('generation error:',e?.stack||e);
+    await tg(env,'sendMessage',{
+      chat_id:chatId,
+      text:`Ошибка генерации: ${e?.message||e}`,
+      reply_markup:mainReplyKeyboard()
+    });
+  }
 }
 
 async function handleUpdate(update,env){
