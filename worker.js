@@ -2387,7 +2387,7 @@ async function askName(env,chatId){
   const s=await settingsFor(env,chatId);
   s.awaitingTarget=true; s.menu='target';
   await saveSettings(env,chatId,s);
-  return tg(env,'sendMessage',{chat_id:chatId,text:'Введи имя или слово того, кого нужно обматерить.\n\nНапример: Вадим\n\nДля отмены нажми «◀️ НАЗАД» или /start.',reply_markup:targetReplyKeyboard()});
+  return tg(env,'sendMessage',{chat_id:chatId,text:'Введи имя или слово того, кого нужно обматерить.\n\nДля отмены нажми «◀️ НАЗАД» или /start.',reply_markup:targetReplyKeyboard()});
 }
 
 async function clearName(env,chatId){
