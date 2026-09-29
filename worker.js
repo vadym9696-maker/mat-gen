@@ -2237,11 +2237,26 @@ export function setSettings(options={}){ Object.assign(runtimeSettings, options)
 // Settings are persisted in Cloudflare KV when BOT_SETTINGS is bound.
 // Without KV the in-memory fallback still works, but settings can reset on cold starts.
 const userSettings = new Map();
+const warnedMissingKV = new Set();
+const warnedKVRead = new Set();
+const warnedKVWrite = new Set();
 const DEFAULT_SETTINGS = {
   mode:'mixed', count:5, diversity:50, compoundMode:true,
   length:'random', targetWord:'', awaitingTarget:false, menu:'main'
 };
 
+function normalizeSettings(raw){
+  const x={...defaultSettings(),...(raw&&typeof raw==='object'?raw:{})};
+  x.mode=['male','female','mixed','chaos'].includes(x.mode)?x.mode:'mixed';
+  x.count=Math.max(1,Math.min(100,Number(x.count)||5));
+  x.diversity=Math.max(0,Math.min(100,Number(x.diversity)||0));
+  x.compoundMode=x.compoundMode!==false;
+  x.length=x.length||'random';
+  x.targetWord=String(x.targetWord||'').slice(0,100);
+  x.awaitingTarget=Boolean(x.awaitingTarget);
+  x.menu=['main','settings','mode','count','diversity','target'].includes(x.menu)?x.menu:'main';
+  return x;
+}
 function defaultSettings(){ return {...DEFAULT_SETTINGS}; }
 
 async function settingsFor(env,chatId){
@@ -2252,33 +2267,38 @@ async function settingsFor(env,chatId){
     try{
       saved=await env.BOT_SETTINGS.get(`settings:${id}`,'json');
     }catch(e){
-      console.error('KV read error; using in-memory fallback:',e?.stack||e);
+      if(!warnedKVRead.has(id)){
+        warnedKVRead.add(id);
+        console.error('BOT_SETTINGS KV read failed; using temporary settings:',e?.message||e);
+      }
     }
-  }else{
-    console.error('BOT_SETTINGS KV binding is not configured; using in-memory fallback');
+  }else if(!warnedMissingKV.has(id)){
+    warnedMissingKV.add(id);
+    console.error('BOT_SETTINGS KV binding is not configured; settings are temporary');
   }
-  const s={...defaultSettings(),...(saved&&typeof saved==='object'?saved:{})};
+  const s=normalizeSettings(saved);
   userSettings.set(id,s);
   return s;
 }
-
 async function saveSettings(env,chatId,s){
   const id=String(chatId);
-  const clean={...defaultSettings(),...s};
-  // Update the live state first so a KV problem never kills the bot.
+  const clean=normalizeSettings(s);
   userSettings.set(id,clean);
   if(env.BOT_SETTINGS){
     try{
       await env.BOT_SETTINGS.put(`settings:${id}`,JSON.stringify(clean));
     }catch(e){
-      console.error('KV write error; keeping in-memory settings:',e?.stack||e);
+      if(!warnedKVWrite.has(id)){
+        warnedKVWrite.add(id);
+        console.error('BOT_SETTINGS KV write failed; keeping temporary settings:',e?.message||e);
+      }
     }
-  }else{
+  }else if(!warnedMissingKV.has(id)){
+    warnedMissingKV.add(id);
     console.error('BOT_SETTINGS KV binding is not configured; settings are temporary');
   }
   return clean;
 }
-
 async function tg(env, method, body){
   const token=String(env.BOT_TOKEN||'').trim();
   if(!token) throw new Error('BOT_TOKEN is not configured');
@@ -2341,7 +2361,6 @@ function keyboard(s){ return settingsReplyKeyboard(s); }
 async function sendMenu(env,chatId,extra=''){
   const s=await settingsFor(env,chatId);
   s.menu='main'; s.awaitingTarget=false;
-  await saveSettings(env,chatId,s);
   const name=s.targetWord||'не задано';
   return tg(env,'sendMessage',{chat_id:chatId,text:`Генератор Мата 0.922\n\nРежим: ${s.mode}\nФраз: ${s.count}\nРазнообразие: ${s.diversity}%\nСоставные: ${s.compoundMode?'включены':'выключены'}\nИмя: ${name}${extra?'\n\n'+extra:''}`,reply_markup:mainReplyKeyboard()});
 }
@@ -2349,7 +2368,6 @@ async function sendMenu(env,chatId,extra=''){
 async function sendSettingsMenu(env,chatId,extra=''){
   const s=await settingsFor(env,chatId);
   s.menu='settings'; s.awaitingTarget=false;
-  await saveSettings(env,chatId,s);
   return tg(env,'sendMessage',{chat_id:chatId,text:`Настройки\n\nРежим: ${s.mode}\nФраз: ${s.count}\nРазнообразие: ${s.diversity}%\nСоставные: ${s.compoundMode?'включены':'выключены'}\nИмя: ${s.targetWord||'не задано'}${extra?'\n\n'+extra:''}`,reply_markup:settingsReplyKeyboard(s)});
 }
 
@@ -2380,7 +2398,7 @@ async function clearName(env,chatId){
 }
 
 function helpText(){
-  return `Генератор Мата 0.922\n\n/start — открыть главное меню\n/generate — сгенерировать\n/generate 10 — сгенерировать указанное количество\n/settings — настройки\n/help — помощь`;
+  return `Генератор Мата 0.922\n\n/start — открыть главное меню\n/generate — сгенерировать\n/generate 10 — сгенерировать указанное количество\n/settings — настройки\n/help — помощь\n/status — состояние настроек`;
 }
 
 async function setupBotMenu(env){
@@ -2388,7 +2406,8 @@ async function setupBotMenu(env){
     {command:'start',description:'Открыть главное меню'},
     {command:'generate',description:'Сгенерировать'},
     {command:'settings',description:'Настройки'},
-    {command:'help',description:'Помощь'}
+    {command:'help',description:'Помощь'},
+    {command:'status',description:'Состояние настроек'}
   ]});
   await tg(env,'setMyDescription',{description:'Генератор Мата 0.922. Нажми /start, чтобы открыть меню и начать работу.'});
 }
@@ -2501,6 +2520,10 @@ async function handleUpdate(update,env){
 
   if(text==='/start') return sendMenu(env,chatId,'Выбери действие кнопками внизу.');
   if(text==='/help') return tg(env,'sendMessage',{chat_id:chatId,text:helpText(),reply_markup:mainReplyKeyboard()});
+  if(text==='/status'){
+    const storage=env.BOT_SETTINGS?'KV: подключено':'KV: НЕ ПОДКЛЮЧЕНО (настройки временные)';
+    return tg(env,'sendMessage',{chat_id:chatId,text:`Хранилище настроек: ${storage}\nРежим: ${s.mode}\nФраз: ${s.count}\nРазнообразие: ${s.diversity}%\nСоставные: ${s.compoundMode?'включены':'выключены'}\nИмя: ${s.targetWord||'не задано'}`,reply_markup:mainReplyKeyboard()});
+  }
   if(text==='/settings' || text==='⚙️ НАСТРОЙКИ') return sendSettingsMenu(env,chatId);
   if(text==='/generate' || text==='🖕 СГЕНЕРИРОВАТЬ') return generateFor(env,chatId);
   if(text==='👤 КОГО ОБМАТЕРИТЬ' || text.startsWith('👤 КОГО ОБМАТЕРИТЬ:')) return askName(env,chatId);
