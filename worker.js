@@ -1,4 +1,4 @@
-// Generator core extracted from ГЕНЕРАТОР МАТА 0.922.
+// Generator core extracted from ГЕНЕРАТОР МАТА 0.924.
 // Telegram adapter supplies the small DOM-like settings interface used by the original engine.
 'use strict';
 
@@ -1045,23 +1045,58 @@ function makePhrase(gender, batchCtx, allowTarget=true){
   const C_JOINED_NOUN=['лихомелкомудник','хуедвупиздник','пиздожопник','мудохуярь','говнопиздец'];
   const pickArr=a=>a[Math.floor(Math.random()*a.length)];
 
+  // 0.924: морфемное наложение сохраняется. Исправляется только финальное
+  // прилагательное окончание. Составная лексема может быть сколь угодно
+  // безумной: «толстомелкопиздохерий» допустимо; «толстомелкопиздохерия»
+  // в мужском режиме и «...ыйая» в женском — уже ошибка сборки.
+  // 0.924: морфемное наложение сохраняется. Исправляется только финальное
+  // прилагательное окончание. Составная лексема может быть сколь угодно
+  // безумной: «толстомелкопиздохерий» допустимо; «толстомелкопиздохерия»
+  // в мужском режиме и «...ыйая» в женском — уже ошибка сборки.
+  // 0.924: морфология составных слов.
+  // Склейка сохраняет старую «наложенную» манеру: несколько основ могут
+  // последовательно наслаиваться перед одним финальным окончанием.
+  // В отличие от 0.924 здесь нет закрытого набора из нескольких шаблонов.
+  // Используются словарные корни/основы и продуктивные связки между ними.
   function compoundAdjectiveGender(wordValue,g){
     let w=String(wordValue||'').toLowerCase();
+    if(!w) return w;
+
+    const toMale=[
+      [/ированная$/u,'ированный'],[/ованная$/u,'ованный'],[/ённая$/u,'ённый'],
+      [/енная$/u,'енный'],[/анная$/u,'анный'],[/ующаяся$/u,'ующийся'],
+      [/ающаяся$/u,'ающийся'],[/яющаяся$/u,'яющийся'],[/ущаяся$/u,'ущийся'],
+      [/ящаяся$/u,'ящийся'],[/ющаяся$/u,'ющийся'],[/ующая$/u,'ующий'],
+      [/ающая$/u,'ающий'],[/яющая$/u,'яющий'],[/ущая$/u,'ущий'],
+      [/ящая$/u,'ящий'],[/ющая$/u,'ющий'],[/цкая$/u,'цкий'],[/ская$/u,'ский'],
+      [/истая$/u,'истый'],[/ливая$/u,'ливый'],[/ная$/u,'ный'],
+      [/яя$/u,'ий'],[/ая$/u,'ый'],[/ая$/u,'ой']
+    ];
+    const toFemale=[
+      [/ированный$/u,'ированная'],[/ованный$/u,'ованная'],[/ённый$/u,'ённая'],
+      [/енный$/u,'енная'],[/анный$/u,'анная'],[/ующийся$/u,'ующаяся'],
+      [/ающийся$/u,'ающаяся'],[/яющийся$/u,'яющаяся'],[/ущийся$/u,'ущаяся'],
+      [/ящийся$/u,'ящаяся'],[/ющийся$/u,'ющаяся'],[/ующий$/u,'ующая'],
+      [/ающий$/u,'ающая'],[/яющий$/u,'яющая'],[/ущий$/u,'ущая'],
+      [/ящий$/u,'ящая'],[/ющий$/u,'ющая'],[/цкий$/u,'цкая'],[/ский$/u,'ская'],
+      [/истый$/u,'истая'],[/ливый$/u,'ливая'],[/ный$/u,'ная'],
+      [/ый$/u,'ая'],[/ой$/u,'ая'],[/ий$/u,'ая']
+    ];
+
+    if(g==='male'){
+      for(const [rx,repl] of toMale) if(rx.test(w)) return w.replace(rx,repl);
+      // Совместимость с редкими формами старых сборок.
+      if(/хуйная$/u.test(w)) return w.replace(/хуйная$/u,'хуевый');
+      return w;
+    }
     if(g!=='female') return w;
-    if(/(ая|яя|уя|юя|ная|ская|истая|ливая|ющая|анная)$/u.test(w)) return w;
-    if(/хуий$/u.test(w)) return w.replace(/хуий$/u,'хуйная');
+
+    const exactFemale=ADJ_FEMALE[w];
+    if(exactFemale) return exactFemale;
+    // Старый генератор допускал «хуевая/хуйная» как отдельный класс.
     if(/хуевый$/u.test(w)) return w.replace(/хуевый$/u,'хуевая');
-    if(/двупиздый$/u.test(w)) return w.replace(/ый$/u,'ая');
-    if(/пиздый$/u.test(w)) return w.replace(/ый$/u,'ая');
-    if(/ский$/u.test(w)) return w.replace(/ский$/u,'ская');
-    if(/истый$/u.test(w)) return w.replace(/истый$/u,'истая');
-    if(/ливый$/u.test(w)) return w.replace(/ливый$/u,'ливая');
-    if(/ющийся$/u.test(w)) return w.replace(/ющийся$/u,'ющаяся');
-    if(/ющий$/u.test(w)) return w.replace(/ющий$/u,'ющая');
-    if(/анный$/u.test(w)) return w.replace(/анный$/u,'анная');
-    if(/ый$/u.test(w)) return w.replace(/ый$/u,'ая');
-    if(/ой$/u.test(w)) return w.replace(/ой$/u,'ая');
-    if(/ий$/u.test(w)) return w.replace(/ий$/u,'ая');
+    if(/хуий$/u.test(w)) return w.replace(/хуий$/u,'хуйная');
+    for(const [rx,repl] of toFemale) if(rx.test(w)) return w.replace(rx,repl);
     return w;
   }
 
@@ -1072,7 +1107,164 @@ function makePhrase(gender, batchCtx, allowTarget=true){
     if(/ник$/u.test(w)) return w.replace(/ник$/u,'ница');
     if(/ец$/u.test(w)) return w.replace(/ец$/u,'ица');
     if(/арь$/u.test(w)) return w.replace(/арь$/u,'арка');
-    return w;
+    // Для полностью новой склейки без словообразовательного хвоста
+    // сохраняем женский род, добавляя продуктивную женскую модель.
+    return /[ая]$/u.test(w) ? w : w+'ка';
+  }
+
+  // Небольшие контролируемые семьи морфем. Они повторяют формы,
+  // которые видны в архивных примерах: «низко-суче-ногий»,
+  // «хуе-зло-мудый», «мудо-манда-пиздый», «манда-херо-кал».
+  const COMPOUND_PREFIXES=[
+    'мало','много','низко','толсто','мелко','зло','сильно','слабо','косо','жирно','мокро',
+    'малоопиздо','малопидо','опиздо','пидо','свино','ското','члено','ебло','гандо','долбо',
+    'хуе','херо','срако','манда','мудо','блядо','суче','пиздо','сосо','свинно'
+  ];
+  const COMPOUND_ROOTS=[
+    'муд','пизд','бляд','гондон','хер','ху','херо','сран','грыз','ног','пидо','пидор',
+    'ёб','ебло','грыз','сос','глот','кал','жоп','жопо','срак','залуп','манд','манда',
+    'долб','дроч','трах','перд','сперм','член','мозг','морда','коро','суч','суче','ганд','гандо'
+  ];
+  const COMPOUND_NOUN_ROOTS=[
+    'кал','хер','херо','грыз','глот','сос','гондон','ёб','ебло','манда','хуй',
+    'муд','пизд','бляд','жоп','сран','пидо','ног','долб','коро','грыз'
+  ];
+  const COMPOUND_SUFFIXES=['','ник','арь','ец','ун','ак','он','ыш'];
+
+  function dynamicCompoundModifiers(){
+    // Не расширяем пул всеми 700+ прилагательными: это давало технические
+    // конструкции вроде «мелконедоразвито...». Нужны именно короткие
+    // соединительные формы старого типа.
+    return COMPOUND_PREFIXES.slice();
+  }
+
+  function joinCompoundMorphemes(parts){
+    // Стыкуем именно морфемы, а не произвольные куски строк. Грамматическое
+    // окончание является атомарным финалом и никогда не получает лишнюю
+    // согласную/соединительную гласную. В частности: пизд + истый -> пиздистый.
+    const out=[];
+    const terminal=/^(?:ый|ий|ой|ный|истый|анный|енный)$/u;
+    for(let i=0;i<parts.length;i++){
+      let p=String(parts[i]||'').toLowerCase();
+      if(!p) continue;
+
+      // Защита от артефакта «хистый»: это не отдельная морфема нашего
+      // составного движка. Если такой хвост всё же попал в сборщик,
+      // рассматриваем его как искажённое «истый».
+      if(/^х(?:истый|анный|енный)$/u.test(p)) p=p.slice(1);
+
+      if(out.length){
+        let prev=out[out.length-1];
+
+        // Окончания присоединяются напрямую. Никакого дополнительного -о/-е
+        // перед ними и никакого удаления основы ради окончания.
+        if(terminal.test(p)){
+          if(/й$/u.test(prev)){
+            prev=prev.slice(0,-1);
+            out[out.length-1]=prev;
+          }
+          out.push(p);
+          continue;
+        }
+
+        // «ху + согласная» -> «хуе + согласная».
+        if(prev==='ху' && /^[бвгджзйклмнпрстфхцчшщ]/u.test(p)){
+          prev+='е'; out[out.length-1]=prev;
+        }
+
+        // Настоящее морфемное наложение: одинаковая граничная буква не
+        // дублируется («мозг» + «гандо» -> «мозгандо»).
+        if(prev && p && prev.at(-1)===p[0]) p=p.slice(1);
+
+        // Соединительную -о/-е используем только между двумя основами.
+        const a=out[out.length-1];
+        if(/[бвгджзклмнпрстфхцчшщ]$/u.test(a) && /^[бвгджзйклмнпрстфхцчшщ]/u.test(p)){
+          if(!/(?:о|е)$/u.test(a) && chance(.52)) out[out.length-1]=a+(chance(.72)?'о':'е');
+        }
+      }
+      out.push(p);
+    }
+    return out.join('');
+  }
+
+  function sourceRootPool(kind){
+    // Пулы уже составлены из словарного морфемного материала; не сканируем
+    // весь DB при каждом кандидате — это было главным узким местом 0.924.
+    return (kind==='noun'?COMPOUND_NOUN_ROOTS:COMPOUND_ROOTS).slice();
+  }
+
+  function buildDynamicCompound(kind){
+    const d=compoundSourceData();
+    const prefixes=dynamicCompoundModifiers();
+    const roots=sourceRootPool(kind);
+    for(let attempt=0;attempt<120;attempt++){
+      const parts=[];
+      if(kind==='adj'){
+        // 0–2 префиксных морфем + 1–3 матерных основы + одно окончание.
+        const prefixCount=chance(.18)?2:(chance(.72)?1:0);
+        for(let i=0;i<prefixCount;i++){
+          let p=pickArr(prefixes);
+          if(i && (parts.includes(p) || p===parts[0])) p=pickArr(prefixes);
+          parts.push(p);
+        }
+        const rootCount=chance(.12)?3:(chance(.68)?2:1);
+        for(let i=0;i<rootCount;i++){
+          let r=pickArr(roots);
+          if(i && parts.includes(r)) r=pickArr(roots);
+          parts.push(r);
+        }
+        // В архивных примерах преобладают -ый/-ий/-ный, но иногда
+        // встречаются -истый/-енный/-анный.
+        const last=String(parts[parts.length-1]||'');
+        let ending;
+        if(/(?:муд|пизд|хер|грыз|жоп|гандон|сран|бляд)$/u.test(last)) {
+          // Эти основы в архивных формах дают твёрдое -ый:
+          // «мудый», «пиздый», «херый», «грызый» и т.п.
+          ending='ый';
+        } else if(/хуй$/u.test(last)) {
+          ending='ный';
+        } else if(/н$/u.test(last)) {
+          ending=chance(.65)?'ный':'ый';
+        } else {
+          ending=pickArr(['ый','ый','ый','ий','ий','ный','истый','енный','анный']);
+        }
+        parts.push(ending);
+      }else{
+        // Существительные: 1–2 соединительные основы, иногда третий корень,
+        // плюс необязательный словообразовательный хвост. Отдельный хвост
+        // не обязателен — это позволяет получать «мандахерокал».
+        const prefixCount=chance(.48)?1:0;
+        for(let i=0;i<prefixCount;i++) parts.push(pickArr(prefixes));
+        const rootCount=chance(.18)?3:(chance(.58)?2:1);
+        for(let i=0;i<rootCount;i++) parts.push(pickArr(roots));
+        if(chance(.62)) parts.push(pickArr(COMPOUND_SUFFIXES));
+      }
+
+      const result=joinCompoundMorphemes(parts).replace(/[^а-яё-]/giu,'');
+      if(result.length<8 || result.length>34) continue;
+      if(d.dict.has(result)) continue;
+      if(/(?:аый|яый|ыый|оый|еый|йый|йий|йой|ийий|ыйый|ойой)$/u.test(result)) continue;
+      if(/(.)\1\1\1/u.test(result)) continue;
+      if(kind==='adj' && !/(ый|ий|ой|ный|истый|анный|енный)$/u.test(result)) continue;
+      return result;
+    }
+    return kind==='adj' ? 'мудомандапиздый' : 'мандахерокал';
+  }
+
+  function generatedCompoundWord(kind,ctx){
+    const freq=ctx.compoundFreq || (ctx.compoundFreq=new Map());
+    const diversity=Number(document.querySelector('#diversity').value)/100;
+    let best='',bestScore=Infinity;
+    for(let i=0;i<20;i++){
+      const candidate=buildDynamicCompound(kind);
+      const f=freq.get(candidate)||0;
+      const novelty=(diversity>=.75 && f===0)?-1.5:0;
+      const score=f*(0.3+diversity*1.8)+Math.random()*0.9+novelty;
+      if(score<bestScore){best=candidate;bestScore=score;}
+      if(diversity>=.8 && f===0) return candidate;
+      if(diversity<=.15 && i===0) return candidate;
+    }
+    return best;
   }
 
   // 0.834: составные слова переработаны по образцу старого генератора.
@@ -1179,92 +1371,16 @@ function makePhrase(gender, batchCtx, allowTarget=true){
     return x;
   }
 
-  // 0.914: составные слова строятся из реальных словарных источников,
-  // но не из случайного куска любого слова. Сначала извлекается одна
-  // узнаваемая матерная основа из конкретного элемента DB, затем основы
-  // соединяются по ограниченному числу старых схем.
-  // 0.915: сложные составные строятся по моделям, замеченным в старых
-  // генерациях: качественная основа + матерная основа + смысловой хвост.
-  // Это намеренно не морфологический словарь: цель — узнаваемая старая
-  // «склейка», но без технических окончаний вроде «хуйый».
-  // 0.916 patch core (embedded in 0.915 file for replacement): complex forms
-  // are built from old-style compound fragments rather than arbitrary dictionary
-  // substrings. These fragments mirror the shapes visible in the reference captures.
-  // 0.917: reference-shaped compound lexemes. Instead of free random
-  // concatenation, use attested shapes from the supplied captures as templates,
-  // then mutate only one slot. This keeps the old generator's «new word» feel
-  // without producing arbitrary technical strings.
-  // 0.920: complex compounds use compatible slots. Each slot has a small
-  // family of roots observed in the captures, so variation changes the word
-  // while preserving its old-school phonetic shape.
-  const REF_COMPLEX_ADJ=[
-    {a:['мудо','манда','блядo'],b:['манда','пидо','опиздо'],c:['пизд','хуй','хуяр'],e:['ый','ий']},
-    {a:['суче','низко'],b:['долбо','мудо','пидо'],c:['ног','хер'],e:['ий','ой']},
-    {a:['мандо','блядo','пидо'],b:['блядo','суче'],c:['гондон','пизд','хер'],e:['ный']},
-    {a:['жирно','толстомелко','косо'],b:['косо','мелко'],c:['хуяр','пизд'],e:['енный']},
-    {a:['ебло','малоопиздо','опиздо'],b:['опиздо','мало'],c:['хер','пизд','грыз'],e:['ый','ий']},
-    {a:['свино','пидо'],b:['свино','блядo'],c:['ёб','хер'],e:['анный']},
-    {a:['ското','пидо'],b:['хуйл','хуе'],c:['ёб','грыз'],e:['ый','ий']},
-    {a:['мало','малопидо','малоопиздо'],b:['пидо','опиздо'],c:['ху','любо'],e:['ий','ый']},
-    {a:['толстомелко'],b:['ху'],c:['пизд','хер'],e:['ий']},
-    {a:['много','мало'],b:['пизд','мудо'],c:['',''],e:['ый','ий']},
-    {a:['малоопиздо','мало'],b:['любо','пиздо'],c:['',''],e:['ый','ий']},
-    {a:['пидо','свино'],b:['свино','блядo'],c:['рыл','грыз'],e:['ый','ий']},
-    {a:['зло','низко'],b:['суче','мудо'],c:['ног','хер'],e:['ий','ый']},
-    {a:['члено','пидо'],b:['сос','глот'],c:['',''],e:['ый','ий']},
-    {a:['хуе','срако'],b:['срако','мудо'],c:['грыз','пизд'],e:['ый','истый']}
-  ];
-  const REF_COMPLEX_NOUN=[
-    {a:['мудо','манда','блядo'],b:['манда','пидо'],c:['пизд','хуй'],e:['ник','арь']},
-    {a:['суче','низко'],b:['долбо','пидо'],c:['ног','хер'],e:['ник','ец']},
-    {a:['мандо','блядo','пидо'],b:['блядo','суче'],c:['гондон','пизд'],e:['ник','арь']},
-    {a:['ебло','опиздо'],b:['опиздо','мало'],c:['хер','грыз'],e:['ник','арь']},
-    {a:['пидо','свино'],b:['свино','блядo'],c:['рыл','грыз'],e:['ник','ец']},
-    {a:['хуе','срако'],b:['срако','мудо'],c:['грыз','пизд'],e:['ник','ец']}
-  ];
-  const REF_COMPLEX_CACHE={dict:null};
-  function compoundSourceData(){
-    if(REF_COMPLEX_CACHE.dict) return REF_COMPLEX_CACHE;
-    const nouns=[...(DB.male||[]),...(DB.female||[])].map(String);
-    const adjs=[...(DB.adj||[])].map(String);
-    REF_COMPLEX_CACHE.dict=new Set([...nouns,...adjs].map(x=>x.toLowerCase()));
-    return REF_COMPLEX_CACHE;
-  }
-  function buildDynamicCompound(kind){
-    const d=compoundSourceData();
-    const models=kind==='adj'?REF_COMPLEX_ADJ:REF_COMPLEX_NOUN;
-    for(let attempt=0;attempt<60;attempt++){
-      const m=pickArr(models);
-      const a=pickArr(m.a), b=pickArr(m.b), c=pickArr(m.c), e=pickArr(m.e);
-      const result=(a+b+c+e).replace(/[^а-яё]/giu,'');
-      if(result.length<8||result.length>34) continue;
-      if(d.dict.has(result)) continue;
-      if(/(?:аый|яый|ыый|оый|еый|йый|йий|йой|хуйый|хуйий|оий|ийий|ыйый|ойой)$/u.test(result)) continue;
-      return result;
-    }
-    return kind==='adj'?'мудомандапиздый':'мудомандапиздник';
-  }
-
-  function generatedCompoundWord(kind,ctx){
-    const freq=ctx.compoundFreq || (ctx.compoundFreq=new Map());
-    const diversity=Number(document.querySelector('#diversity').value)/100;
-    let best='',bestScore=Infinity;
-    for(let i=0;i<16;i++){
-      const candidate=buildDynamicCompound(kind);
-      const f=freq.get(candidate)||0;
-      // Повтор разрешён, но при высокой Diversity его стоимость выше.
-      const score=f*(0.35+diversity*1.65)+Math.random()*0.7;
-      if(score<bestScore){best=candidate;bestScore=score;}
-      if(diversity>=.8 && f===0) return candidate;
-      if(diversity<=.15 && i===0) return candidate;
-    }
-    return best;
-  }
-
-  function sanitizeCompound(w,kind){
+  // 0.924: динамическая склейка по морфемным семействам.
+  // В отличие от 0.924/0.924 число слотов не фиксировано: 1–3 основы
+  // могут комбинироваться с 0–2 модификаторами и одним финальным окончанием.
+    function sanitizeCompound(w,kind){
     let x=String(w||'').toLowerCase();
     x=x.replace(/([аеёиоуыэюя])\1{2,}/gu,'$1$1');
-    return x.length>32 ? x.slice(0,32) : x;
+    // Никогда не режем готовую лексему по длине: это уничтожало именно
+    // окончание составного прилагательного. Длина контролируется при
+    // построении кандидата, до того как к нему применяется родовое окончание.
+    return x;
   }
 
   function compoundWordCount(text){
@@ -1331,16 +1447,20 @@ function makePhrase(gender, batchCtx, allowTarget=true){
   }
 
   const ADV=[
-    'безусловно','воистину','непременно','определённо','несомненно','разумеется',
-    'безоговорочно','абсолютно','совершенно','категорически','однозначно','явно',
-    'несомненно','неизменно','неуклонно','откровенно','искренне','прямо-таки',
-    'поистине','истинно','впрямь','действительно','реально','вполне','весьма',
-    'довольно','достаточно','чрезвычайно','необычайно','невероятно','невообразимо',
-    'немыслимо','несусветно','непомерно','небывало','изрядно','крайне','особенно',
-    'чуть-чуть','слегка','капельку','чуточку','малость','немного','немножко',
-    'почти','едва ли','уж очень','в меру','не в меру','до безобразия',
-    'до неприличия','подозрительно','необъяснимо','безнадёжно','непристойно', 'излишне',
-    'чрезмерно','стопудово','на редкость','исключительно','прямо','настолько'
+    // Частотное ядро по архивным примерам damn.ru: усилители не должны
+    // существовать только в словаре — они должны регулярно попадать внутрь
+    // самой конструкции.
+    'очень','сильно','чрезмерно','невероятно','абсолютно','аномально','ненормально',
+    'немыслимо','непомерно','достаточно','чуточку','чуть-чуть','капельку','слегка',
+    'немного','малость','едва ли','стопудово','впрямь','воистину','действительно',
+    'в самом деле','поистине','совершенно','излишне','необоснованно','невероятно',
+    'безусловно','непременно','определённо','несомненно','разумеется','безоговорочно',
+    'категорически','однозначно','явно','неизменно','неуклонно','откровенно','искренне',
+    'прямо-таки','истинно','реально','вполне','весьма','довольно','чрезвычайно',
+    'необычайно','невообразимо','несусветно','небывало','изрядно','крайне','особенно',
+    'почти','немножко','уж очень','в меру','не в меру','до безобразия','до неприличия',
+    'подозрительно','необъяснимо','безнадёжно','непристойно','на редкость',
+    'исключительно','прямо','настолько'
   ];
 
   // Словарные составные слова. Эта ветка используется только когда
@@ -1830,11 +1950,92 @@ function makePhrase(gender, batchCtx, allowTarget=true){
     return clean(`${simple(a.gender)} — ${double(b.gender)}, ${A2(b.gender)} и ${A2(b.gender)} ${b.word}!`);
   }
 
+  // 0.927 DAMN-SCREENSHOT CONSTRUCTION LAYER
+  // Сверено по архивным скринам: не один шаблон «ADV + A + N», а набор
+  // независимых рисунков. Усилитель может относиться к первому, второму или
+  // третьему определению, а после тире может начинаться новая группа со своим
+  // усилителем. Это специально оставляет старую нерегулярность damn.ru.
+  function damnScreenshotPhraseRaw(L){
+    const g = chaos ? groupGender() : gender;
+    const n = nounInfo(g), n2 = nounInfo(g), n3 = nounInfo(g), n4 = nounInfo(g);
+    const simple = (nn=n)=>`${A(g,false)} ${nn.word}`;
+    const advSimple = (nn=n)=>`${adv()} ${A(g,false)} ${nn.word}`;
+    const pair = (nn=n)=>`${A(g,false)} и ${A2(g)} ${nn.word}`;
+    const pairAdvFirst = (nn=n)=>`${adv()} ${A(g,false)} и ${A2(g)} ${nn.word}`;
+    const pairAdvSecond = (nn=n)=>`${A(g,false)} и ${adv()} ${A2(g)} ${nn.word}`;
+    const double = (nn=n)=>`${A(g,false)}, ${A2(g)} ${nn.word}`;
+    const doubleAdvFirst = (nn=n)=>`${adv()} ${A(g,false)}, ${A2(g)} ${nn.word}`;
+    const doubleAdvSecond = (nn=n)=>`${A(g,false)}, ${adv()} ${A2(g)} ${nn.word}`;
+    const advDouble = (nn=n)=>`${adv()} ${A(g,false)}, ${A2(g)} ${nn.word}`;
+    const triple = (nn=n)=>`${A(g,false)}, ${A2(g)} и ${A2(g)} ${nn.word}`;
+    const tripleAdvFirst = (nn=n)=>`${adv()} ${A(g,false)}, ${A2(g)} и ${A2(g)} ${nn.word}`;
+    const tripleAdvMiddle = (nn=n)=>`${A(g,false)}, ${adv()} ${A2(g)} и ${A2(g)} ${nn.word}`;
+    const tripleAdvLast = (nn=n)=>`${A(g,false)}, ${A2(g)} и ${adv()} ${A2(g)} ${nn.word}`;
+    const tripleTwoAdv = (nn=n)=>`${adv()} ${A(g,false)}, ${A2(g)} и ${adv()} ${A2(g)} ${nn.word}`;
+    const role = ()=>rolePhrase(g);
+    const roleWithAdj = ()=>`${A2(g)} ${rolePhrase(g)}`;
+    const dash=(a,b)=>clean(`${a} — ${b}!`);
+
+    if(L==='short'){
+      const r=Math.random();
+      if(r<.12) return clean(`${simple()}!`);
+      if(r<.22) return clean(`${double()}!`);
+      if(r<.31) return clean(`${pair()}!`);
+      if(r<.39) return clean(`${role()}!`);
+      if(r<.49) return clean(`${advSimple()}!`);
+      if(r<.58) return clean(`${doubleAdvFirst()}!`);
+      if(r<.66) return clean(`${doubleAdvSecond()}!`);
+      if(r<.74) return clean(`${pairAdvFirst()}!`);
+      if(r<.82) return clean(`${pairAdvSecond()}!`);
+      if(r<.89) return dash(simple(n),simple(n2));
+      if(r<.95) return dash(roleWithAdj(),simple(n2));
+      return dash(n.word,advSimple(n2));
+    }
+
+    if(L==='medium'){
+      const r=Math.random();
+      if(r<.09) return clean(`${double()}!`);
+      if(r<.17) return clean(`${triple()}!`);
+      if(r<.25) return clean(`${pairAdvFirst()}!`);
+      if(r<.33) return clean(`${pairAdvSecond()}!`);
+      if(r<.41) return clean(`${doubleAdvFirst()}!`);
+      if(r<.49) return clean(`${doubleAdvSecond()}!`);
+      if(r<.56) return clean(`${tripleAdvFirst()}!`);
+      if(r<.63) return clean(`${tripleAdvMiddle()}!`);
+      if(r<.70) return clean(`${tripleAdvLast()}!`);
+      if(r<.76) return clean(`${role()} ${genitiveNoun(n2.word,g)}!`);
+      if(r<.82) return dash(double(n),simple(n2));
+      if(r<.87) return dash(doubleAdvFirst(n),simple(n2));
+      if(r<.92) return dash(roleWithAdj(),double(n2));
+      if(r<.96) return dash(simple(n),roleWithAdj());
+      return clean(`${adv()} ${simple()} ${genitiveNoun(n2.word,g)}!`);
+    }
+
+    const r=Math.random();
+    if(r<.07) return clean(`${triple()}!`);
+    if(r<.14) return clean(`${tripleAdvFirst()}!`);
+    if(r<.21) return clean(`${tripleAdvMiddle()}!`);
+    if(r<.28) return clean(`${tripleAdvLast()}!`);
+    if(r<.35) return clean(`${tripleTwoAdv()}!`);
+    if(r<.42) return clean(`${adv()} ${triple()}!`);
+    if(r<.48) return dash(triple(n),simple(n2));
+    if(r<.54) return dash(triple(n),advSimple(n2));
+    if(r<.60) return dash(tripleAdvFirst(n),simple(n2));
+    if(r<.66) return dash(simple(n),triple(n2));
+    if(r<.72) return dash(simple(n),tripleAdvLast(n2));
+    if(r<.78) return dash(roleWithAdj(),double(n2));
+    if(r<.84) return dash(doubleAdvFirst(n),roleWithAdj());
+    if(r<.89) return clean(`${role()} ${genitiveNoun(n2.word,g)} — ${A2(g)} ${n.word}!`);
+    if(r<.94) return clean(`${adv()} ${roleWithAdj()} — ${doubleAdvSecond(n2)}!`);
+    if(r<.97) return clean(`${advSimple(n)} — ${advDouble(n2)}!`);
+    return clean(`${simple(n)} — ${tripleTwoAdv(n2)}!`);
+  }
+
   // 0.900 EXPERIMENTAL OLD SCHOOL ENGINE
   // Не заменяет Classic: это отдельный пробный слой. Мужской/женский/смешанный/
   // хаос остаются прежними; меняется только способ сборки фразы.
   function oldSchoolExperimentalPhraseRaw(L){
-    // 0.914: упрощённая грамматика в духе старого damn.ru.
+    // 0.925: упрощённая грамматика в духе старого damn.ru.
     // Без составного слова фраза должна выглядеть как обычная короткая
     // конструкция; безумие создаётся сочетанием слов, усилителей и 1 ударной
     // составной лексемы, а не сложной грамматикой.
@@ -2049,7 +2250,7 @@ function makePhrase(gender, batchCtx, allowTarget=true){
 
   // Галочка включает составные конструкции поверх обычного движка.
   // При выключенной галочке путь генерации ниже не изменяется.
-  if(compoundEnabled && chance(.08)){
+  if(compoundEnabled && chance(.14)){
     // Жёсткий предохранитель: составной композит никогда не может
     // «съесть» всю фразу и выдать один токен при medium/long.
     const minWords=compoundMinWords(length);
@@ -2102,14 +2303,16 @@ function makePhrase(gender, batchCtx, allowTarget=true){
     return clean(`${A(g,false)}, ${A2(g)} ${n1.word} и ${A2(g)} ${n2.word} ${genitiveNoun(n3.word,g)}!`);
   }
 
-  // 0.900 UNIFIED ENGINE
+  // 0.927 UNIFIED ENGINE
   // Один движок объединяет старые конструкционные схемы и Old School-слой.
   // Режимы мужской/женский/смешанный/хаос остаются параметрами одного и того же
   // генератора, а не отдельными генераторами.
   let out='';
-  const oldWeight = length==='short' ? .72 : (length==='medium' ? .68 : .64);
+  const oldWeight = length==='short' ? .64 : (length==='medium' ? .60 : .56);
   if(chaos && !target && chance(.22)) out=chaosLoosePhrase();
-  else if(chance(oldWeight)) out=oldSchoolExperimentalPhraseRaw(length);
+  else if(chance(oldWeight)){
+    out=chance(.68) ? damnScreenshotPhraseRaw(length) : oldSchoolExperimentalPhraseRaw(length);
+  }
   else {
     const sourceSchemes = chaos ? (target ? chaosTargetSchemes : chaosSchemes) : (target ? targetSchemes : null);
     if(!sourceSchemes) out=constructionPhrase();
@@ -2362,7 +2565,7 @@ async function sendMenu(env,chatId,extra=''){
   const s=await settingsFor(env,chatId);
   s.menu='main'; s.awaitingTarget=false;
   const name=s.targetWord||'не задано';
-  return tg(env,'sendMessage',{chat_id:chatId,text:`Генератор Мата 0.922\n\nРежим: ${s.mode}\nФраз: ${s.count}\nРазнообразие: ${s.diversity}%\nСоставные: ${s.compoundMode?'включены':'выключены'}\nИмя: ${name}${extra?'\n\n'+extra:''}`,reply_markup:mainReplyKeyboard()});
+  return tg(env,'sendMessage',{chat_id:chatId,text:`Генератор Мата 0.927\n\nРежим: ${s.mode}\nФраз: ${s.count}\nРазнообразие: ${s.diversity}%\nСоставные: ${s.compoundMode?'включены':'выключены'}\nИмя: ${name}${extra?'\n\n'+extra:''}`,reply_markup:mainReplyKeyboard()});
 }
 
 async function sendSettingsMenu(env,chatId,extra=''){
@@ -2398,7 +2601,7 @@ async function clearName(env,chatId){
 }
 
 function helpText(){
-  return `Генератор Мата 0.922\n\n/start — открыть главное меню\n/generate — сгенерировать\n/generate 10 — сгенерировать указанное количество\n/settings — настройки\n/help — помощь\n/status — состояние настроек`;
+  return `Генератор Мата 0.927\n\n/start — открыть главное меню\n/generate — сгенерировать\n/generate 10 — сгенерировать указанное количество\n/settings — настройки\n/help — помощь\n/status — состояние настроек`;
 }
 
 async function setupBotMenu(env){
@@ -2409,7 +2612,7 @@ async function setupBotMenu(env){
     {command:'help',description:'Помощь'},
     {command:'status',description:'Состояние настроек'}
   ]});
-  await tg(env,'setMyDescription',{description:'Генератор Мата 0.922. Нажми /start, чтобы открыть меню и начать работу.'});
+  await tg(env,'setMyDescription',{description:'Генератор Мата 0.927. Нажми /start, чтобы открыть меню и начать работу.'});
 }
 
 function splitTelegramText(text,max=3900){
@@ -2561,7 +2764,7 @@ async function handleUpdate(update,env){
 
 export default {
   async fetch(request, env){
-    if(request.method==='GET') return new Response('Генератор Мата 0.922: OK');
+    if(request.method==='GET') return new Response('Генератор Мата 0.927: OK');
     if(request.method!=='POST') return new Response('Method Not Allowed',{status:405});
     if(!env.BOT_TOKEN) return new Response('BOT_TOKEN is not configured',{status:500});
     const secret=env.WEBHOOK_SECRET;
