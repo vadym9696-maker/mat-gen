@@ -2229,8 +2229,15 @@ const warnedMissingKV = new Set();
 const warnedKVRead = new Set();
 const warnedKVWrite = new Set();
 const DEFAULT_SETTINGS = {
-  mode:'mixed', count:5, diversity:50, length:'random', targetWord:'', awaitingTarget:false, menu:'main'
+  mode:'mixed', count:5, diversity:50, length:'random', targetWord:'', awaitingTarget:false, menu:'main',
+  textWords:300, textParagraphs:'one', textFreq:'rare'
 };
+const TEXT_WORDS_CHOICES=[100,300,500,1000,2000];
+const TEXT_WORDS_MAX=2000;
+const TEXT_PARAS={'¶ Один абзац':'one','¶ 3 абзаца':'three','¶ 5 абзацев':'five'};
+const TEXT_PARAS_LABEL={one:'один абзац',three:'3 абзаца',five:'5 абзацев'};
+const TEXT_FREQ={'🎯 Имя в тексте: редко':'rare','🎯 Имя в тексте: часто':'often','🎯 Имя в тексте: не вставлять':'none'};
+const TEXT_FREQ_LABEL={rare:'редко',often:'часто',none:'не вставлять'};
 
 function normalizeSettings(raw){
   const x={...defaultSettings(),...(raw&&typeof raw==='object'?raw:{})};
@@ -2242,7 +2249,10 @@ function normalizeSettings(raw){
   x.targetWord=String(x.targetWord||'').slice(0,100);
   if(x.targetWord==='👤 КОГО ОБМАТЕРИТЬ' || x.targetWord.startsWith('👤 КОГО ОБМАТЕРИТЬ:')) x.targetWord='';
   x.awaitingTarget=Boolean(x.awaitingTarget);
-  x.menu=['main','settings','mode','count','diversity','target'].includes(x.menu)?x.menu:'main';
+  x.textWords=Math.max(50,Math.min(TEXT_WORDS_MAX,Math.floor(Number(x.textWords))||300));
+  x.textParagraphs=['one','three','five'].includes(x.textParagraphs)?x.textParagraphs:'one';
+  x.textFreq=['rare','often','none'].includes(x.textFreq)?x.textFreq:'rare';
+  x.menu=['main','settings','mode','count','diversity','target','textwords','textparas','textfreq'].includes(x.menu)?x.menu:'main';
   return x;
 }
 function defaultSettings(){ return {...DEFAULT_SETTINGS}; }
@@ -2309,9 +2319,9 @@ async function tg(env, method, body){
 // Telegram reply-keyboard menus. All controls stay in the input area.
 function mainReplyKeyboard(){
   return {keyboard:[
-    [{text:'/start'},{text:'🖕 СГЕНЕРИРОВАТЬ'}],
+    [{text:'🖕 СГЕНЕРИРОВАТЬ'},{text:'📝 ТЕКСТ'}],
     [{text:'⚙️ НАСТРОЙКИ'},{text:'👤 КОГО ОБМАТЕРИТЬ'}],
-    [{text:'🧹 УБРАТЬ ЦЕЛЬ'},{text:'/help'}]
+    [{text:'🧹 УБРАТЬ ЦЕЛЬ'},{text:'/start'},{text:'/help'}]
   ],resize_keyboard:true,is_persistent:true,input_field_placeholder:'Выбери действие или введи команду'};
 }
 function settingsReplyKeyboard(s){
@@ -2319,8 +2329,11 @@ function settingsReplyKeyboard(s){
     [{text:`🎛 РЕЖИМ: ${s.mode}`}],
     [{text:`🔢 КОЛИЧЕСТВО: ${s.count}`}],
     [{text:`🌈 РАЗНООБРАЗИЕ: ${s.diversity}%`}],
+    [{text:`📝 СЛОВ В ТЕКСТЕ: ${s.textWords}`}],
+    [{text:`¶ АБЗАЦЫ: ${TEXT_PARAS_LABEL[s.textParagraphs]}`}],
+    [{text:`🎯 ИМЯ В ТЕКСТЕ: ${TEXT_FREQ_LABEL[s.textFreq]}`}],
     [{text:`👤 КОГО ОБМАТЕРИТЬ: ${s.targetWord||'не задано'}`}],
-    [{text:'◀️ НАЗАД'},{text:'🖕 СГЕНЕРИРОВАТЬ'}]
+    [{text:'◀️ НАЗАД'},{text:'🖕 СГЕНЕРИРОВАТЬ'},{text:'📝 ТЕКСТ'}]
   ],resize_keyboard:true,is_persistent:true,input_field_placeholder:'Выбери параметр'};
 }
 function targetReplyKeyboard(){return {keyboard:[
@@ -2341,6 +2354,20 @@ function diversityReplyKeyboard(){return {keyboard:[
   [{text:'75%'},{text:'100%'}],
   [{text:'◀️ НАЗАД'}]
 ],resize_keyboard:true,is_persistent:true,input_field_placeholder:'Выбери разнообразие'};}
+function textWordsReplyKeyboard(){return {keyboard:[
+  [{text:'100 слов'},{text:'300 слов'},{text:'500 слов'}],
+  [{text:'1000 слов'},{text:'2000 слов'}],
+  [{text:'◀️ НАЗАД'}]
+],resize_keyboard:true,is_persistent:true,input_field_placeholder:'Сколько слов в тексте'};}
+function textParasReplyKeyboard(){return {keyboard:[
+  [{text:'¶ Один абзац'}],[{text:'¶ 3 абзаца'},{text:'¶ 5 абзацев'}],
+  [{text:'◀️ НАЗАД'}]
+],resize_keyboard:true,is_persistent:true,input_field_placeholder:'Сколько абзацев'};}
+function textFreqReplyKeyboard(){return {keyboard:[
+  [{text:'🎯 Имя в тексте: редко'},{text:'🎯 Имя в тексте: часто'}],
+  [{text:'🎯 Имя в тексте: не вставлять'}],
+  [{text:'◀️ НАЗАД'}]
+],resize_keyboard:true,is_persistent:true,input_field_placeholder:'Как часто вставлять имя'};}
 function replyKeyboard(){ return mainReplyKeyboard(); }
 
 function keyboard(s){ return settingsReplyKeyboard(s); }
@@ -2355,18 +2382,25 @@ async function sendMenu(env,chatId,extra=''){
 async function sendSettingsMenu(env,chatId,extra=''){
   const s=await settingsFor(env,chatId);
   s.menu='settings'; s.awaitingTarget=false;
-  return tg(env,'sendMessage',{chat_id:chatId,text:`Настройки\n\nРежим: ${s.mode}\nФраз: ${s.count}\nРазнообразие: ${s.diversity}%\nИмя: ${s.targetWord||'не задано'}${extra?'\n\n'+extra:''}`,reply_markup:settingsReplyKeyboard(s)});
+  return tg(env,'sendMessage',{chat_id:chatId,text:`Настройки\n\nРежим: ${s.mode}\nФраз: ${s.count}\nРазнообразие: ${s.diversity}%\nТекст: ${s.textWords} слов, ${TEXT_PARAS_LABEL[s.textParagraphs]}, имя ${TEXT_FREQ_LABEL[s.textFreq]}\nИмя: ${s.targetWord||'не задано'}${extra?'\n\n'+extra:''}`,reply_markup:settingsReplyKeyboard(s)});
 }
 
-async function generateTextFor(env,chatId){
-  const s=await settingsFor(env,chatId);
+async function generateTextFor(env,chatId,wordsOverride){
+  let s;
+  try{ s=await settingsFor(env,chatId); }
+  catch(e){ return tg(env,'sendMessage',{chat_id:chatId,text:`Ошибка настроек: ${e?.message||e}`,reply_markup:mainReplyKeyboard()}); }
+  const words=Math.max(50,Math.min(TEXT_WORDS_MAX,Math.floor(Number(wordsOverride))||s.textWords));
   try{
-    setSettings({diversity:s.diversity,textGender:s.mode});
-    const text=generateText({words:500,gender:s.mode,paragraphs:'one',targetFreq:'rare'});
-    return tg(env,'sendMessage',{chat_id:chatId,text:String(text).slice(0,3900),reply_markup:replyKeyboard()});
+    setSettings({diversity:s.diversity,textGender:s.mode,targetWord:s.targetWord,length:s.length});
+    const text=generateText({words,gender:s.mode,paragraphs:s.textParagraphs,targetFreq:s.targetWord?s.textFreq:'none'});
+    const chunks=splitTelegramText(text);
+    for(const chunk of chunks){
+      await tg(env,'sendMessage',{chat_id:chatId,text:chunk,reply_markup:mainReplyKeyboard()});
+    }
+    recordGeneration(env,chatId,words,s.targetWord,'text');
   }catch(e){
-    console.error('text generation error',e);
-    return tg(env,'sendMessage',{chat_id:chatId,text:`Ошибка генерации текста: ${e?.message||e}`,reply_markup:replyKeyboard()});
+    console.error('text generation error:',e?.stack||e);
+    await tg(env,'sendMessage',{chat_id:chatId,text:`Ошибка генерации текста: ${e?.message||e}`,reply_markup:mainReplyKeyboard()});
   }
 }
 
@@ -2389,13 +2423,14 @@ function versionText(){
 }
 
 function helpText(){
-  return `Генератор Мата ${VERSION}\n\n/start — открыть главное меню\n/generate — сгенерировать\n/generate 10 — сгенерировать указанное количество\n/settings — настройки\n/help — помощь\n/status — состояние настроек\n/version — версия генератора`;
+  return `Генератор Мата ${VERSION}\n\n/start — открыть главное меню\n/generate — сгенерировать\n/generate 10 — сгенерировать указанное количество\n/text — сгенерировать связный текст\n/text 500 — текст на указанное число слов (50–2000)\n/settings — настройки\n/help — помощь\n/status — состояние настроек\n/version — версия генератора`;
 }
 
 async function setupBotMenu(env){
   await tg(env,'setMyCommands',{commands:[
     {command:'start',description:'Открыть главное меню'},
     {command:'generate',description:'Сгенерировать'},
+    {command:'text',description:'Сгенерировать текст'},
     {command:'settings',description:'Настройки'},
     {command:'help',description:'Помощь'},
     {command:'status',description:'Состояние настроек'},
@@ -2450,6 +2485,7 @@ async function generateFor(env,chatId,countOverride){
         reply_markup:mainReplyKeyboard()
       });
     }
+    recordGeneration(env,chatId,count,s.targetWord);
   }catch(e){
     console.error('generation error:',e?.stack||e);
     await tg(env,'sendMessage',{
@@ -2460,7 +2496,196 @@ async function generateFor(env,chatId,countOverride){
   }
 }
 
+// ===== Admin / statistics (owner only) =====
+// Владелец задаётся секретом ADMIN_ID (Telegram user id, можно несколько через запятую).
+// Статистика копится в памяти и пачками (раз в STATS_FLUSH_MS) пишется в KV BOT_SETTINGS
+// под ключом stats:v1: так не расходуется лимит записей KV. Владелец в статистику не попадает.
+const STATS_KEY='stats:v1';
+const STATS_FLUSH_MS=8000;
+const STATS_KEEP_DAYS=40;
+const STATS_MAX_TARGETS=300;
+let statsDelta=null, statsLastFlush=0, statsMemory=null;
+
+const newStatsBag=()=>({tot:{},users:{},days:{},targets:{}});
+const emptyStats=()=>({v:1,since:Date.now(),...newStatsBag()});
+const tzOffsetMs=env=>{const h=Number(env?.STATS_TZ_OFFSET);return (Number.isFinite(h)&&String(env?.STATS_TZ_OFFSET).trim()!==''?h:3)*3600e3;};
+const dayKey=(env,ts=Date.now())=>new Date(ts+tzOffsetMs(env)).toISOString().slice(0,10);
+const adminIds=env=>String(env?.ADMIN_ID||env?.ADMIN_IDS||'').split(/[\s,;]+/).filter(Boolean);
+const isAdmin=(env,userId,chatType)=>userId!=null && adminIds(env).includes(String(userId)) && (!chatType||chatType==='private');
+
+function bag(){ return statsDelta||(statsDelta=newStatsBag()); }
+function dUser(id,ts){
+  const b=bag(); const u=b.users[id]||(b.users[id]={m:0,g:0});
+  if(u.f==null) u.f=ts; u.l=ts; return u;
+}
+function dDay(env,ts,userId){
+  const b=bag(); const k=dayKey(env,ts);
+  const d=b.days[k]||(b.days[k]={m:0,g:0,p:0,u:[]});
+  if(userId!=null && !d.u.includes(String(userId))) d.u.push(String(userId));
+  return d;
+}
+function recordMessage(env,from,chat,isStart){
+  try{
+    if(!from?.id || isAdmin(env,from.id)) return;
+    const ts=Date.now(); const id=String(from.id);
+    const u=dUser(id,ts); u.m++;
+    if(from.username) u.n=from.username;
+    if(isStart){ u.st=1; u.s=1; bag().tot.starts=(bag().tot.starts||0)+1; }
+    bag().tot.updates=(bag().tot.updates||0)+1;
+    dDay(env,ts,id).m++;
+  }catch(e){ console.error('stats record error:',e?.message||e); }
+}
+function recordBlock(env,userId,blocked){
+  try{
+    if(!userId || isAdmin(env,userId)) return;
+    const ts=Date.now(); const u=dUser(String(userId),ts);
+    u.s=blocked?0:1; if(!blocked) u.st=1;
+    const k=blocked?'blocked_events':'unblocked_events'; bag().tot[k]=(bag().tot[k]||0)+1;
+  }catch(e){ console.error('stats block error:',e?.message||e); }
+}
+function recordGeneration(env,userId,count,target,kind='phrases'){
+  try{
+    if(!userId || isAdmin(env,userId)) return;
+    const ts=Date.now(); const id=String(userId);
+    const u=dUser(id,ts); u.g++;
+    const t=bag().tot; t.generations=(t.generations||0)+1;
+    if(kind==='text'){ t.texts=(t.texts||0)+1; t.words=(t.words||0)+(Number(count)||0); }
+    else t.phrases=(t.phrases||0)+(Number(count)||0);
+    const d=dDay(env,ts,id); d.g++; if(kind!=='text') d.p+=Number(count)||0;
+    const name=String(target||'').trim().replace(/\s+/g,' ').slice(0,60);
+    if(name){
+      const key=name.toLowerCase();
+      const x=bag().targets[key]||(bag().targets[key]={n:0,d:name});
+      x.n++; x.d=name;
+    }
+  }catch(e){ console.error('stats generation error:',e?.message||e); }
+}
+
+function applyStats(base,d,env){
+  for(const [k,v] of Object.entries(d.tot||{})) base.tot[k]=(base.tot[k]||0)+v;
+  for(const [id,du] of Object.entries(d.users||{})){
+    const u=base.users[id]||(base.users[id]={f:du.f,l:0,m:0,g:0});
+    u.m=(u.m||0)+(du.m||0); u.g=(u.g||0)+(du.g||0);
+    if(du.f!=null) u.f=Math.min(u.f??du.f,du.f);
+    if(du.l!=null) u.l=Math.max(u.l||0,du.l);
+    if(du.st) u.st=1;
+    if(du.s!=null) u.s=du.s;
+    if(du.n) u.n=du.n;
+  }
+  for(const [k,dd] of Object.entries(d.days||{})){
+    const x=base.days[k]||(base.days[k]={m:0,g:0,p:0,u:[]});
+    x.m+=dd.m||0; x.g+=dd.g||0; x.p+=dd.p||0;
+    const set=new Set(x.u); for(const id of dd.u||[]) set.add(id); x.u=[...set];
+  }
+  for(const [k,dt] of Object.entries(d.targets||{})){
+    const x=base.targets[k]||(base.targets[k]={n:0,d:dt.d});
+    x.n+=dt.n||0; x.d=dt.d||x.d;
+  }
+  const keys=Object.keys(base.days).sort();
+  for(const k of keys.slice(0,Math.max(0,keys.length-STATS_KEEP_DAYS))) delete base.days[k];
+  const tk=Object.entries(base.targets);
+  if(tk.length>STATS_MAX_TARGETS){
+    tk.sort((a,b)=>b[1].n-a[1].n);
+    base.targets=Object.fromEntries(tk.slice(0,STATS_MAX_TARGETS));
+  }
+  return base;
+}
+
+async function flushStats(env,force=false){
+  if(!statsDelta) return;
+  const now=Date.now();
+  if(!force && now-statsLastFlush<STATS_FLUSH_MS) return;
+  const delta=statsDelta; statsDelta=null; statsLastFlush=now;
+  if(!env.BOT_SETTINGS){ statsMemory=applyStats(statsMemory||emptyStats(),delta,env); return; }
+  try{
+    const cur=(await env.BOT_SETTINGS.get(STATS_KEY,'json'))||emptyStats();
+    await env.BOT_SETTINGS.put(STATS_KEY,JSON.stringify(applyStats(cur,delta,env)));
+  }catch(e){
+    console.error('stats flush failed; keeping delta in memory:',e?.message||e);
+    statsDelta=applyStats(statsDelta||newStatsBag(),delta,env);
+  }
+}
+async function loadStats(env){
+  await flushStats(env,true);
+  if(!env.BOT_SETTINGS) return statsMemory||emptyStats();
+  try{ return (await env.BOT_SETTINGS.get(STATS_KEY,'json'))||emptyStats(); }
+  catch(e){ console.error('stats read failed:',e?.message||e); return statsMemory||emptyStats(); }
+}
+
+const fmtN=n=>Number(n||0).toLocaleString('ru-RU').replace(/\u00a0/g,' ');
+function fmtDate(env,ts){ return new Date(ts+tzOffsetMs(env)).toISOString().replace('T',' ').slice(0,16); }
+function lastDays(env,n){ const out=[]; const now=Date.now(); for(let i=0;i<n;i++) out.push(dayKey(env,now-i*86400e3)); return out; }
+function sumDays(st,keys,f){ return keys.reduce((a,k)=>a+((st.days[k]||{})[f]||0),0); }
+function uniqDays(st,keys){ const s=new Set(); for(const k of keys) for(const id of (st.days[k]?.u||[])) s.add(id); return s.size; }
+function topTargets(st,n){ return Object.values(st.targets||{}).sort((a,b)=>b.n-a.n).slice(0,n); }
+
+function statsText(env,st){
+  const d1=lastDays(env,1), d7=lastDays(env,7), d30=lastDays(env,30);
+  const users=Object.values(st.users||{});
+  const started=users.filter(u=>u.st).length;
+  const blocked=users.filter(u=>u.s===0).length;
+  const active=users.filter(u=>u.st&&u.s!==0).length;
+  const today0=new Date(dayKey(env)+'T00:00:00Z').getTime()-tzOffsetMs(env);
+  const new1=users.filter(u=>u.f>=today0).length, new7=users.filter(u=>u.f>=today0-6*86400e3).length;
+  const top=topTargets(st,5).map((t,i)=>`${i+1}. ${t.d} — ${fmtN(t.n)}`).join('\n')||'пока нет';
+  return [
+    `📊 Статистика бота (с ${fmtDate(env,st.since||Date.now())}, UTC${tzOffsetMs(env)>=0?'+':''}${tzOffsetMs(env)/3600e3})`,
+    ``,
+    `👥 Уникальные аккаунты: ${fmtN(users.length)}`,
+    `   новых: сегодня ${fmtN(new1)} · 7 дн ${fmtN(new7)}`,
+    `   активных: сегодня ${fmtN(uniqDays(st,d1))} · 7 дн ${fmtN(uniqDays(st,d7))} · 30 дн ${fmtN(uniqDays(st,d30))}`,
+    ``,
+    `🔔 Подписки: нажали /start ${fmtN(started)} · активны ${fmtN(active)} · заблокировали бота ${fmtN(blocked)}`,
+    ``,
+    `💬 Обращения (сообщения и кнопки): всего ${fmtN(st.tot?.updates)}`,
+    `   сегодня ${fmtN(sumDays(st,d1,'m'))} · 7 дн ${fmtN(sumDays(st,d7,'m'))} · 30 дн ${fmtN(sumDays(st,d30,'m'))}`,
+    ``,
+    `🖕 Генераций: всего ${fmtN(st.tot?.generations)} (фраз ${fmtN(st.tot?.phrases)}, текстов ${fmtN(st.tot?.texts)} / слов ${fmtN(st.tot?.words)})`,
+    `   сегодня ${fmtN(sumDays(st,d1,'g'))} · 7 дн ${fmtN(sumDays(st,d7,'g'))} · 30 дн ${fmtN(sumDays(st,d30,'g'))}`,
+    ``,
+    `🎯 Топ целей:\n${top}`,
+    ``,
+    `/top 20 — больше целей · /users — активные аккаунты · /admin — помощь`
+  ].join('\n');
+}
+function topText(env,st,n){
+  const arr=topTargets(st,n);
+  if(!arr.length) return 'Целей пока нет.';
+  return `🎯 Топ ${arr.length} целей (по числу генераций)\n\n`+arr.map((t,i)=>`${i+1}. ${t.d} — ${fmtN(t.n)}`).join('\n');
+}
+function usersText(env,st){
+  const arr=Object.entries(st.users||{}).sort((a,b)=>(b[1].g-a[1].g)||(b[1].l-a[1].l)).slice(0,15);
+  if(!arr.length) return 'Аккаунтов пока нет.';
+  return '👥 Топ аккаунтов по генерациям\n\n'+arr.map(([id,u],i)=>`${i+1}. ${u.n?'@'+u.n:id} (${id}) — ген. ${fmtN(u.g)}, обращ. ${fmtN(u.m)}, был ${fmtDate(env,u.l)}${u.s===0?' 🚫':''}`).join('\n');
+}
+function adminHelpText(){
+  return '🔐 Админ-команды (видны только владельцу)\n\n/stats — общая статистика\n/top [N] — топ целей (по умолчанию 10, макс. 50)\n/users — топ аккаунтов по генерациям\n/resetstats — обнулить статистику (потребует подтверждения)\n/myid — показать свой Telegram ID (доступно всем)';
+}
+const ADMIN_CMD_RX=/^\/(admin|stats|top|users|resetstats)(?:@\w+)?(?:\s+(.*))?$/i;
+
+async function handleAdminCommand(env,chatId,text){
+  const m=ADMIN_CMD_RX.exec(text); const cmd=m[1].toLowerCase(); const arg=(m[2]||'').trim();
+  const send=t=>tg(env,'sendMessage',{chat_id:chatId,text:t.slice(0,4000),reply_markup:mainReplyKeyboard()});
+  if(cmd==='admin') return send(adminHelpText());
+  if(cmd==='stats') return send(statsText(env,await loadStats(env))+(env.BOT_SETTINGS?'':'\n\n⚠️ KV не подключён: статистика временная и сбросится при перезапуске воркера.'));
+  if(cmd==='top') return send(topText(env,await loadStats(env),Math.max(1,Math.min(50,parseInt(arg,10)||10))));
+  if(cmd==='users') return send(usersText(env,await loadStats(env)));
+  if(cmd==='resetstats'){
+    if(arg.toLowerCase()!=='confirm') return send('Это удалит всю статистику без возможности восстановления.\nПодтверди командой: /resetstats confirm');
+    statsDelta=null; statsMemory=null;
+    if(env.BOT_SETTINGS){ try{ await env.BOT_SETTINGS.delete(STATS_KEY); }catch(e){ return send('Не удалось сбросить: '+(e?.message||e)); } }
+    return send('Статистика обнулена.');
+  }
+}
+
 async function handleUpdate(update,env){
+  if(update.my_chat_member){
+    const mc=update.my_chat_member;
+    if(mc.chat?.type==='private'){ const st=mc.new_chat_member?.status; if(st==='kicked'||st==='left') recordBlock(env,mc.from?.id,true); else if(st==='member') recordBlock(env,mc.from?.id,false); }
+    return;
+  }
+  if(update.callback_query) recordMessage(env,update.callback_query.from,update.callback_query.message?.chat,false);
+  else if(update.message?.chat?.type==='private') recordMessage(env,update.message.from,update.message.chat,/^\/start(?:@\w+)?(?:\s|$)/i.test(String(update.message.text||'')));
   if(update.callback_query){
     // Backward compatibility with any old inline-button message still in the chat.
     const q=update.callback_query; const chatId=q.message?.chat?.id;
@@ -2479,6 +2704,8 @@ async function handleUpdate(update,env){
 
   const m=update.message; if(!m||!m.chat) return;
   const chatId=m.chat.id; const text=String(m.text||'').trim();
+  if(/^\/myid(?:@\w+)?$/i.test(text)) return tg(env,'sendMessage',{chat_id:chatId,text:`Твой Telegram ID: ${m.from?.id}`,reply_markup:mainReplyKeyboard()});
+  if(ADMIN_CMD_RX.test(text) && isAdmin(env,m.from?.id,m.chat.type)) return handleAdminCommand(env,chatId,text);
   const s=await settingsFor(env,chatId);
 
   if(s.awaitingTarget){
@@ -2494,12 +2721,13 @@ async function handleUpdate(update,env){
     }
     // Never store a bot menu button as the target name.
     const controlTexts=new Set([
-      '/version','🖕 СГЕНЕРИРОВАТЬ','⚙️ НАСТРОЙКИ','👤 КОГО ОБМАТЕРИТЬ','🧹 УБРАТЬ ЦЕЛЬ','/help',
+      '/version','🖕 СГЕНЕРИРОВАТЬ','📝 ТЕКСТ','⚙️ НАСТРОЙКИ','👤 КОГО ОБМАТЕРИТЬ','🧹 УБРАТЬ ЦЕЛЬ','/help',
       '🎛 РЕЖИМ: '+s.mode, '🔢 КОЛИЧЕСТВО: '+s.count,
       '🌈 РАЗНООБРАЗИЕ: '+s.diversity+'%',
-      `👤 КОГО ОБМАТЕРИТЬ: ${s.targetWord||'не задано'}`
+      `👤 КОГО ОБМАТЕРИТЬ: ${s.targetWord||'не задано'}`,
+      `📝 СЛОВ В ТЕКСТЕ: ${s.textWords}`, `¶ АБЗАЦЫ: ${TEXT_PARAS_LABEL[s.textParagraphs]}`, `🎯 ИМЯ В ТЕКСТЕ: ${TEXT_FREQ_LABEL[s.textFreq]}`
     ]);
-    if(!controlTexts.has(text) && !['♂️ Мужской','♀️ Женский','⚖️ Смешанный','☠️ Хаос','1','5','10','20','50','100','0%','25%','50%','75%','100%'].includes(text)){
+    if(!controlTexts.has(text) && !['♂️ Мужской','♀️ Женский','⚖️ Смешанный','☠️ Хаос','1','5','10','20','50','100','0%','25%','50%','75%','100%','100 слов','300 слов','500 слов','1000 слов','2000 слов',...Object.keys(TEXT_PARAS),...Object.keys(TEXT_FREQ)].includes(text)){
       s.targetWord=text.slice(0,100); s.awaitingTarget=false;
       await saveSettings(env,chatId,s);
       return sendSettingsMenu(env,chatId,`Имя установлено: ${s.targetWord}`);
@@ -2517,10 +2745,12 @@ async function handleUpdate(update,env){
   }
   if(text==='/settings' || text==='⚙️ НАСТРОЙКИ') return sendSettingsMenu(env,chatId);
   if(text==='/generate' || text==='🖕 СГЕНЕРИРОВАТЬ') return generateFor(env,chatId);
+  if(/^\/text(?:@\w+)?$/i.test(text) || text==='📝 ТЕКСТ') return generateTextFor(env,chatId);
+  { const mt=/^\/text(?:@\w+)?\s+(\d+)$/i.exec(text); if(mt) return generateTextFor(env,chatId,mt[1]); }
   if(text==='👤 КОГО ОБМАТЕРИТЬ' || text.startsWith('👤 КОГО ОБМАТЕРИТЬ:')) return askName(env,chatId);
   if(text==='🧹 УБРАТЬ ЦЕЛЬ') return clearName(env,chatId);
   if(text==='◀️ НАЗАД'){
-    if(s.menu==='mode' || s.menu==='count' || s.menu==='diversity') return sendSettingsMenu(env,chatId);
+    if(['mode','count','diversity','textwords','textparas','textfreq'].includes(s.menu)) return sendSettingsMenu(env,chatId);
     if(s.menu==='target') return sendSettingsMenu(env,chatId);
     return sendMenu(env,chatId);
   }
@@ -2529,6 +2759,12 @@ async function handleUpdate(update,env){
   if(text.startsWith('🎛 РЕЖИМ:')) { s.menu='mode'; await saveSettings(env,chatId,s); return tg(env,'sendMessage',{chat_id:chatId,text:'Выбери режим:',reply_markup:modeReplyKeyboard()}); }
   if(text.startsWith('🔢 КОЛИЧЕСТВО:')) { s.menu='count'; await saveSettings(env,chatId,s); return tg(env,'sendMessage',{chat_id:chatId,text:'Выбери количество фраз:',reply_markup:countReplyKeyboard()}); }
   if(text.startsWith('🌈 РАЗНООБРАЗИЕ:')) { s.menu='diversity'; await saveSettings(env,chatId,s); return tg(env,'sendMessage',{chat_id:chatId,text:'Выбери разнообразие:',reply_markup:diversityReplyKeyboard()}); }
+  if(text.startsWith('📝 СЛОВ В ТЕКСТЕ:')) { s.menu='textwords'; await saveSettings(env,chatId,s); return tg(env,'sendMessage',{chat_id:chatId,text:`Сколько слов в тексте? (максимум ${TEXT_WORDS_MAX}, или командой /text 750)`,reply_markup:textWordsReplyKeyboard()}); }
+  if(text.startsWith('¶ АБЗАЦЫ:')) { s.menu='textparas'; await saveSettings(env,chatId,s); return tg(env,'sendMessage',{chat_id:chatId,text:'Сколько абзацев в тексте?',reply_markup:textParasReplyKeyboard()}); }
+  if(text.startsWith('🎯 ИМЯ В ТЕКСТЕ:')) { s.menu='textfreq'; await saveSettings(env,chatId,s); return tg(env,'sendMessage',{chat_id:chatId,text:'Как часто вставлять имя цели в текст?',reply_markup:textFreqReplyKeyboard()}); }
+  { const mw=/^(\d+) слов$/.exec(text); if(mw && TEXT_WORDS_CHOICES.includes(Number(mw[1]))){ s.textWords=Number(mw[1]); await saveSettings(env,chatId,s); return sendSettingsMenu(env,chatId); } }
+  if(TEXT_PARAS[text]){ s.textParagraphs=TEXT_PARAS[text]; await saveSettings(env,chatId,s); return sendSettingsMenu(env,chatId); }
+  if(TEXT_FREQ[text]){ s.textFreq=TEXT_FREQ[text]; await saveSettings(env,chatId,s); return sendSettingsMenu(env,chatId); }
   if(text.startsWith('🧩 СОСТАВНЫЕ:')) return sendSettingsMenu(env,chatId); // старая кнопка в чате: просто обновить меню
 
   if(['♂️ Мужской','♀️ Женский','⚖️ Смешанный','☠️ Хаос'].includes(text)){
@@ -2549,7 +2785,7 @@ async function handleUpdate(update,env){
 }
 
 export default {
-  async fetch(request, env){
+  async fetch(request, env, ctx){
     if(request.method==='GET') return new Response(`Генератор Мата ${VERSION}: OK`);
     if(request.method!=='POST') return new Response('Method Not Allowed',{status:405});
     if(!env.BOT_TOKEN) return new Response('BOT_TOKEN is not configured',{status:500});
@@ -2558,6 +2794,8 @@ export default {
     try{
       const update=await request.json();
       await handleUpdate(update,env);
+      const fl=flushStats(env);
+      if(ctx&&typeof ctx.waitUntil==='function') ctx.waitUntil(fl); else await fl;
       return new Response('OK');
     }catch(e){
       console.error('Telegram webhook error:',e?.stack||e);
