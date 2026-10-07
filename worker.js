@@ -2249,6 +2249,7 @@ function normalizeSettings(raw){
   x.targetWord=String(x.targetWord||'').slice(0,100);
   if(x.targetWord==='👤 КОГО ОБМАТЕРИТЬ' || x.targetWord.startsWith('👤 КОГО ОБМАТЕРИТЬ:')) x.targetWord='';
   x.awaitingTarget=Boolean(x.awaitingTarget);
+  x.awaitingFrom=String(x.awaitingFrom||''); x.awaitingAt=Number(x.awaitingAt)||0;
   x.textWords=Math.max(50,Math.min(TEXT_WORDS_MAX,Math.floor(Number(x.textWords))||300));
   x.textParagraphs=['one','three','five'].includes(x.textParagraphs)?x.textParagraphs:'one';
   x.textFreq=['rare','often','none'].includes(x.textFreq)?x.textFreq:'rare';
@@ -2298,6 +2299,8 @@ async function saveSettings(env,chatId,s){
   return clean;
 }
 async function tg(env, method, body){
+  // В группах постоянные reply-клавиатуры не показываем (они навязываются всем участникам и не работают при privacy mode).
+  if(method==='sendMessage' && Number(body?.chat_id)<0 && body?.reply_markup?.keyboard){ body={...body}; delete body.reply_markup; }
   const token=String(env.BOT_TOKEN||'').trim();
   if(!token) throw new Error('BOT_TOKEN is not configured');
   const r=await fetch(`https://api.telegram.org/bot${token}/${method}`,{
@@ -2385,7 +2388,7 @@ async function sendSettingsMenu(env,chatId,extra=''){
   return tg(env,'sendMessage',{chat_id:chatId,text:`Настройки\n\nРежим: ${s.mode}\nФраз: ${s.count}\nРазнообразие: ${s.diversity}%\nТекст: ${s.textWords} слов, ${TEXT_PARAS_LABEL[s.textParagraphs]}, имя ${TEXT_FREQ_LABEL[s.textFreq]}\nИмя: ${s.targetWord||'не задано'}${extra?'\n\n'+extra:''}`,reply_markup:settingsReplyKeyboard(s)});
 }
 
-async function generateTextFor(env,chatId,wordsOverride){
+async function generateTextFor(env,chatId,wordsOverride,userId){
   let s;
   try{ s=await settingsFor(env,chatId); }
   catch(e){ return tg(env,'sendMessage',{chat_id:chatId,text:`Ошибка настроек: ${e?.message||e}`,reply_markup:mainReplyKeyboard()}); }
@@ -2397,17 +2400,23 @@ async function generateTextFor(env,chatId,wordsOverride){
     for(const chunk of chunks){
       await tg(env,'sendMessage',{chat_id:chatId,text:chunk,reply_markup:mainReplyKeyboard()});
     }
-    recordGeneration(env,chatId,words,s.targetWord,'text');
+    recordGeneration(env,userId??chatId,words,s.targetWord,'text');
   }catch(e){
     console.error('text generation error:',e?.stack||e);
     await tg(env,'sendMessage',{chat_id:chatId,text:`Ошибка генерации текста: ${e?.message||e}`,reply_markup:mainReplyKeyboard()});
   }
 }
 
-async function askName(env,chatId){
+async function askName(env,chatId,m){
   const s=await settingsFor(env,chatId);
-  s.awaitingTarget=true; s.menu='target';
+  const group=Number(chatId)<0;
+  s.awaitingTarget=true; s.menu='target'; s.awaitingAt=Date.now(); s.awaitingFrom=String(m?.from?.id??'');
   await saveSettings(env,chatId,s);
+  if(group){
+    return tg(env,'sendMessage',{chat_id:chatId,reply_to_message_id:m?.message_id,allow_sending_without_reply:true,
+      text:'Ответь на это сообщение именем или словом того, кого нужно обматерить.\nИли сразу одной командой: /target Имя',
+      reply_markup:{force_reply:true,selective:true,input_field_placeholder:'Имя или слово'}});
+  }
   return tg(env,'sendMessage',{chat_id:chatId,text:'Введи имя или слово того, кого нужно обматерить.\n\nДля отмены нажми «◀️ НАЗАД» или /start.',reply_markup:targetReplyKeyboard()});
 }
 
@@ -2422,8 +2431,12 @@ function versionText(){
   return `Генератор Мата ${VERSION}\nДвижок составных слов: морфемная склейка (всегда включена)\nСловарь: ${DB.male.length} муж. / ${DB.female.length} жен. / ${DB.adj.length} прил.`;
 }
 
+function groupHelpText(){
+  return `Генератор Мата ${VERSION} — работа в группе\n\n/target Имя — кого обматерить (или просто /target и ответь на сообщение бота)\n/cleartarget — убрать цель\n/generate [N] — фразы\n/text [слов] — связный текст\n/mode male|female|mixed|chaos — режим\n/count N — фраз за раз\n/diversity N — разнообразие, %\n/settings — настройки чата\n\nНастройки и цель общие для всей группы.`;
+}
+
 function helpText(){
-  return `Генератор Мата ${VERSION}\n\n/start — открыть главное меню\n/generate — сгенерировать\n/generate 10 — сгенерировать указанное количество\n/text — сгенерировать связный текст\n/text 500 — текст на указанное число слов (50–2000)\n/settings — настройки\n/help — помощь\n/status — состояние настроек\n/version — версия генератора`;
+  return `Генератор Мата ${VERSION}\n\n/start — открыть главное меню\n/generate — сгенерировать\n/generate 10 — сгенерировать указанное количество\n/text — сгенерировать связный текст\n/text 500 — текст на указанное число слов (50–2000)\n/target Имя — кого обматерить (работает и в группах)\n/cleartarget — убрать цель\n/mode, /count, /diversity — настройки командами\n/settings — настройки\n/help — помощь\n/status — состояние настроек\n/version — версия генератора`;
 }
 
 async function setupBotMenu(env){
@@ -2431,6 +2444,8 @@ async function setupBotMenu(env){
     {command:'start',description:'Открыть главное меню'},
     {command:'generate',description:'Сгенерировать'},
     {command:'text',description:'Сгенерировать текст'},
+    {command:'target',description:'Кого обматерить: /target Имя'},
+    {command:'cleartarget',description:'Убрать цель'},
     {command:'settings',description:'Настройки'},
     {command:'help',description:'Помощь'},
     {command:'status',description:'Состояние настроек'},
@@ -2453,7 +2468,7 @@ function splitTelegramText(text,max=3900){
   return out;
 }
 
-async function generateFor(env,chatId,countOverride){
+async function generateFor(env,chatId,countOverride,userId){
   let s;
   try{
     s=await settingsFor(env,chatId);
@@ -2485,7 +2500,7 @@ async function generateFor(env,chatId,countOverride){
         reply_markup:mainReplyKeyboard()
       });
     }
-    recordGeneration(env,chatId,count,s.targetWord);
+    recordGeneration(env,userId??chatId,count,s.targetWord);
   }catch(e){
     console.error('generation error:',e?.stack||e);
     await tg(env,'sendMessage',{
@@ -2685,6 +2700,9 @@ async function handleUpdate(update,env){
     return;
   }
   if(update.callback_query) recordMessage(env,update.callback_query.from,update.callback_query.message?.chat,false);
+  else if(update.message?.chat?.type==='group'||update.message?.chat?.type==='supergroup'){
+    if(/^\/(generate|text|target|name|cleartarget|untarget|settings|mode|count|diversity|help|status|version)(?:@\w+)?(?:\s|$)/i.test(String(update.message.text||''))) recordMessage(env,update.message.from,update.message.chat,false);
+  }
   else if(update.message?.chat?.type==='private') recordMessage(env,update.message.from,update.message.chat,/^\/start(?:@\w+)?(?:\s|$)/i.test(String(update.message.text||'')));
   if(update.callback_query){
     // Backward compatibility with any old inline-button message still in the chat.
@@ -2703,12 +2721,23 @@ async function handleUpdate(update,env){
   }
 
   const m=update.message; if(!m||!m.chat) return;
-  const chatId=m.chat.id; const text=String(m.text||'').trim();
+  const chatId=m.chat.id;
+  // В группах команды приходят как /cmd@botname — убираем суффикс.
+  const text=String(m.text||'').trim().replace(/^(\/[A-Za-z0-9_]+)@[A-Za-z0-9_]+/,'$1');
+  const isGroup=m.chat.type==='group'||m.chat.type==='supergroup';
+  const fromId=String(m.from?.id??'');
+  const send=(t,extra={})=>tg(env,'sendMessage',{chat_id:chatId,text:t,...extra,reply_markup:mainReplyKeyboard()});
   if(/^\/myid(?:@\w+)?$/i.test(text)) return tg(env,'sendMessage',{chat_id:chatId,text:`Твой Telegram ID: ${m.from?.id}`,reply_markup:mainReplyKeyboard()});
   if(ADMIN_CMD_RX.test(text) && isAdmin(env,m.from?.id,m.chat.type)) return handleAdminCommand(env,chatId,text);
   const s=await settingsFor(env,chatId);
 
   if(s.awaitingTarget){
+    const stale=isGroup && s.awaitingAt && Date.now()-s.awaitingAt>10*60*1000;
+    const foreign=isGroup && String(s.awaitingFrom||'')!==fromId;
+    // Команда отменяет ожидание имени; в группе имя принимает только тот, кто его запросил.
+    if(stale || (!foreign && text.startsWith('/') && text!=='/start')){ s.awaitingTarget=false; await saveSettings(env,chatId,s); }
+  }
+  if(s.awaitingTarget && !(isGroup && String(s.awaitingFrom||'')!==fromId)){
     if(text==='◀️ НАЗАД'){
       s.awaitingTarget=false;
       await saveSettings(env,chatId,s);
@@ -2730,12 +2759,14 @@ async function handleUpdate(update,env){
     if(!controlTexts.has(text) && !['♂️ Мужской','♀️ Женский','⚖️ Смешанный','☠️ Хаос','1','5','10','20','50','100','0%','25%','50%','75%','100%','100 слов','300 слов','500 слов','1000 слов','2000 слов',...Object.keys(TEXT_PARAS),...Object.keys(TEXT_FREQ)].includes(text)){
       s.targetWord=text.slice(0,100); s.awaitingTarget=false;
       await saveSettings(env,chatId,s);
+      if(isGroup) return tg(env,'sendMessage',{chat_id:chatId,text:`Цель установлена: ${s.targetWord}\nГенерировать: /generate`});
       return sendSettingsMenu(env,chatId,`Имя установлено: ${s.targetWord}`);
     }
     s.awaitingTarget=false;
     await saveSettings(env,chatId,s);
   }
 
+  if(isGroup && (text==='/start' || text==='/help')) return tg(env,'sendMessage',{chat_id:chatId,text:groupHelpText()});
   if(text==='/start') return sendMenu(env,chatId,'Выбери действие кнопками внизу.');
   if(/^\/(version|ver|v)(@\w+)?$/i.test(text)) return tg(env,'sendMessage',{chat_id:chatId,text:versionText(),reply_markup:mainReplyKeyboard()});
   if(text==='/help') return tg(env,'sendMessage',{chat_id:chatId,text:helpText(),reply_markup:mainReplyKeyboard()});
@@ -2743,11 +2774,39 @@ async function handleUpdate(update,env){
     const storage=env.BOT_SETTINGS?'KV: подключено':'KV: НЕ ПОДКЛЮЧЕНО (настройки временные)';
     return tg(env,'sendMessage',{chat_id:chatId,text:`Хранилище настроек: ${storage}\nРежим: ${s.mode}\nФраз: ${s.count}\nРазнообразие: ${s.diversity}%\nИмя: ${s.targetWord||'не задано'}`,reply_markup:mainReplyKeyboard()});
   }
+  if(isGroup && text==='/settings') return tg(env,'sendMessage',{chat_id:chatId,text:`Настройки чата\n\nРежим: ${s.mode}\nФраз: ${s.count}\nРазнообразие: ${s.diversity}%\nТекст: ${s.textWords} слов, ${TEXT_PARAS_LABEL[s.textParagraphs]}, имя ${TEXT_FREQ_LABEL[s.textFreq]}\nЦель: ${s.targetWord||'не задана'}\n\n/target Имя · /cleartarget · /mode · /count · /diversity`});
   if(text==='/settings' || text==='⚙️ НАСТРОЙКИ') return sendSettingsMenu(env,chatId);
-  if(text==='/generate' || text==='🖕 СГЕНЕРИРОВАТЬ') return generateFor(env,chatId);
-  if(/^\/text(?:@\w+)?$/i.test(text) || text==='📝 ТЕКСТ') return generateTextFor(env,chatId);
-  { const mt=/^\/text(?:@\w+)?\s+(\d+)$/i.exec(text); if(mt) return generateTextFor(env,chatId,mt[1]); }
-  if(text==='👤 КОГО ОБМАТЕРИТЬ' || text.startsWith('👤 КОГО ОБМАТЕРИТЬ:')) return askName(env,chatId);
+  if(text==='/generate' || text==='🖕 СГЕНЕРИРОВАТЬ') return generateFor(env,chatId,undefined,m.from?.id);
+  if(/^\/text(?:@\w+)?$/i.test(text) || text==='📝 ТЕКСТ') return generateTextFor(env,chatId,undefined,m.from?.id);
+  { const mt=/^\/text(?:@\w+)?\s+(\d+)$/i.exec(text); if(mt) return generateTextFor(env,chatId,mt[1],m.from?.id); }
+  if(text==='👤 КОГО ОБМАТЕРИТЬ' || text.startsWith('👤 КОГО ОБМАТЕРИТЬ:')) return askName(env,chatId,m);
+  { const mt=/^\/(?:target|name)(?:\s+([\s\S]+))?$/i.exec(text);
+    if(mt){
+      const nm=(mt[1]||'').trim().slice(0,100);
+      if(!nm) return askName(env,chatId,m);
+      s.targetWord=nm; s.awaitingTarget=false; await saveSettings(env,chatId,s);
+      return tg(env,'sendMessage',{chat_id:chatId,text:`Цель установлена: ${nm}\nГенерировать: /generate`});
+    } }
+  if(/^\/(?:cleartarget|untarget)$/i.test(text)){ s.targetWord=''; s.awaitingTarget=false; await saveSettings(env,chatId,s); return tg(env,'sendMessage',{chat_id:chatId,text:'Цель удалена.'}); }
+  { const mm=/^\/mode(?:\s+(\S+))?$/i.exec(text);
+    if(mm){
+      const map={male:'male','м':'male','муж':'male','мужской':'male',female:'female','ж':'female','жен':'female','женский':'female',mixed:'mixed','смеш':'mixed','смешанный':'mixed',chaos:'chaos','хаос':'chaos'};
+      const v=map[(mm[1]||'').toLowerCase()];
+      if(!v) return tg(env,'sendMessage',{chat_id:chatId,text:`Режим сейчас: ${s.mode}\nИзменить: /mode male | female | mixed | chaos (м / ж / смеш / хаос)`});
+      s.mode=v; await saveSettings(env,chatId,s); return tg(env,'sendMessage',{chat_id:chatId,text:`Режим: ${v}`});
+    } }
+  { const mc=/^\/count(?:\s+(\S+))?$/i.exec(text);
+    if(mc){
+      const n=parseInt(mc[1],10);
+      if(!Number.isFinite(n)) return tg(env,'sendMessage',{chat_id:chatId,text:`Фраз сейчас: ${s.count}\nИзменить: /count 1–100`});
+      s.count=Math.max(1,Math.min(100,n)); await saveSettings(env,chatId,s); return tg(env,'sendMessage',{chat_id:chatId,text:`Фраз за раз: ${s.count}`});
+    } }
+  { const md=/^\/diversity(?:\s+(\S+))?$/i.exec(text);
+    if(md){
+      const n=parseInt(md[1],10);
+      if(!Number.isFinite(n)) return tg(env,'sendMessage',{chat_id:chatId,text:`Разнообразие сейчас: ${s.diversity}%\nИзменить: /diversity 0–100`});
+      s.diversity=Math.max(0,Math.min(100,n)); await saveSettings(env,chatId,s); return tg(env,'sendMessage',{chat_id:chatId,text:`Разнообразие: ${s.diversity}%`});
+    } }
   if(text==='🧹 УБРАТЬ ЦЕЛЬ') return clearName(env,chatId);
   if(text==='◀️ НАЗАД'){
     if(['mode','count','diversity','textwords','textparas','textfreq'].includes(s.menu)) return sendSettingsMenu(env,chatId);
@@ -2779,8 +2838,9 @@ async function handleUpdate(update,env){
   }
 
   if(text.startsWith('/generate')){
-    const n=text.split(/\s+/)[1]; return generateFor(env,chatId,n);
+    const n=text.split(/\s+/)[1]; return generateFor(env,chatId,n,m.from?.id);
   }
+  if(isGroup) return; // в группах на обычные сообщения не отвечаем
   return tg(env,'sendMessage',{chat_id:chatId,text:'Нажми /start, чтобы открыть меню.',reply_markup:mainReplyKeyboard()});
 }
 
