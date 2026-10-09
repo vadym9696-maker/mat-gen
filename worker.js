@@ -3,7 +3,7 @@
 'use strict';
 
 const VERSION = '0.940';
-const BUILD_NOTE = 'compound-engine: morpheme builder, always on';
+const BUILD_NOTE = 'морфемные составные слова + аутентичная расстановка имени/наречий (v2)';
 
 const runtimeSettings = {
   diversity: 50,
@@ -84,10 +84,8 @@ function choose(arr, localUsed, batchUsed, diversityOverride, ctx){
   //   100% — жёсткое исключение уже использованного до исчерпания пула.
   // Так повтор слова в одной фразе возможен, но на 50% не превращается
   // в постоянное дублирование.
-  const freshLocal = arr.filter(x=>!local.has(x));
-  const freshBatch = arr.filter(x=>!batch.has(x));
-
   if(diversity >= 1){
+    const freshLocal = arr.filter(x=>!local.has(x));
     // Сначала слово, которое не встречалось ни в текущей фразе, ни в пачке.
     const batchFreshLocal=freshLocal.filter(x=>!batch.has(x));
     if(batchFreshLocal.length) return pick(batchFreshLocal);
@@ -107,23 +105,35 @@ function choose(arr, localUsed, batchUsed, diversityOverride, ctx){
   const localPenalty = Math.max(0.035, 1 - 1.75*diversity);
   const batchPenalty = Math.max(0.06, 1 - 1.45*diversity);
   const freq = ctx.freq || (ctx.freq = new Map());
-  const weighted = arr.map(x=>{
-    const n=freq.get(x)||0;
-    // Повтор одного и того же слова несколько раз в пачке получает
-    // дополнительный плавный штраф. Это особенно важно для маленьких
-    // специализированных пулов вроде role-слов: 50% не должен превращаться
-    // в «пиздососка» через каждые две строки.
-    const repeatPenalty = n>0 ? Math.pow(0.62, Math.min(n,4)) : 1;
-    const w=(local.has(x) ? localPenalty : (batch.has(x) ? batchPenalty : 1))*repeatPenalty;
-    return {x,w};
-  });
-  const total=weighted.reduce((sum,z)=>sum+z.w,0);
-  let r=Math.random()*total;
-  for(const z of weighted){
-    r-=z.w;
-    if(r<=0) return z.x;
+  // 0.941: сначала выбор отбраковкой (все веса ≤ 1, поэтому распределение то же, что у полного прохода,
+  // но стоимость почти O(1)); если пул почти исчерпан — полный взвешенный проход ниже.
+  {
+    const m=arr.length;
+    for(let t=0;t<40;t++){
+      const x=arr[Math.floor(Math.random()*m)];
+      const f=freq.get(x)||0;
+      const w=(local.has(x) ? localPenalty : (batch.has(x) ? batchPenalty : 1))*(f>0 ? Math.pow(0.62, Math.min(f,4)) : 1);
+      if(w>=1 || Math.random()<w) return x;
+    }
   }
-  return weighted[weighted.length-1].x;
+  const n=arr.length;
+  const W=(choose._buf && choose._buf.length>=n) ? choose._buf : (choose._buf=new Float64Array(Math.max(n,1024)));
+  let total=0;
+  for(let i=0;i<n;i++){
+    const x=arr[i];
+    const f=freq.get(x)||0;
+    // Повтор одного и того же слова несколько раз в пачке получает дополнительный плавный штраф
+    // (важно для маленьких пулов вроде role-слов).
+    const repeatPenalty = f>0 ? Math.pow(0.62, Math.min(f,4)) : 1;
+    const w=(local.has(x) ? localPenalty : (batch.has(x) ? batchPenalty : 1))*repeatPenalty;
+    W[i]=w; total+=w;
+  }
+  let r=Math.random()*total;
+  for(let i=0;i<n;i++){
+    r-=W[i];
+    if(r<=0) return arr[i];
+  }
+  return arr[n-1];
 }
 
 // 0.810: реестр схем должен быть доступен schemePick().
@@ -1140,10 +1150,10 @@ function makePhraseCore(gender, batchCtx, allowTarget=true){
   // терминал с готовым окончанием. Терминал уже содержит корректный суффикс,
   // поэтому «-оец/-оун/-оак», «гандоннный», «-ий» после мягкой/твёрдой и т.п.
   // получиться не могут по построению.
-  const CM_ENH=['лохо','дуро','лихо','свино','ското','гнойно','недо','зло','жирно','низко','толсто','мало','мелко','слабо','сильно','много','малоопиздо'];
+  const CM_ENH=['лохо','дуро','лихо','свино','ското','гнойно','недо','зло','жирно','низко','толсто','мало','мелко','слабо','сильно','много','малоопиздо','трое','полно','мокро','пере','козло','хуе'];
   const CM_ROOT=[['хуе','хуй'],['хуйло','хуй'],['херо','хер'],['пиздо','пизд'],['блядо','бляд'],['мудо','муд'],['говно','говн'],['жопо','жоп'],['срако','срак'],['залупо','залуп'],['манда','манд'],['суче','суч'],['дроче','дроч'],['трахо','трах'],['пердо','перд'],['члено','член'],['спермо','сперм'],['дристо','дрист'],['пидо','пид'],['ебло','еб'],['гондоно','гонд'],['мозго','мозг'],['сосо','сос'],['долбо','долб'],['ското','скот']];
   const CM_TADJ=[['пиздый','пизд'],['пиздистый','пизд'],['мудый','муд'],['жопый','жоп'],['хуевый','хуй'],['хуий','хуй'],['херый','хер'],['мордый','морд'],['рылый','рыл'],['ногий','ног'],['любый','люб'],['любивый','люб'],['ёбый','еб'],['ёбанный','еб'],['ебучий','еб'],['ебливый','еб'],['срачный','срак'],['сраный','срак'],['блудный','блуд'],['грызый','грыз'],['жадный','жад'],['лицемерный','лиц'],['трахнутый','трах'],['сосучий','сос'],['хуяренный','хуй'],['гондонный','гонд'],['залупистый','залуп'],['дристливый','дрист'],['говнистый','говн'],['дрочливый','дроч'],['сучий','суч']];
-  const CM_TNOUN=[['пиздник','пизд'],['жопник','жоп'],['мудник','муд'],['сранник','срак'],['хуесос','хуй'],['сос','сос'],['сосун','сос'],['кал','кал'],['хер','хер'],['ёб','еб'],['ёбарь','еб'],['ёбщик','еб'],['блуд','блуд'],['блудник','блуд'],['хуярь','хуй'],['дрочун','дроч'],['пердун','перд'],['грызун','грыз'],['трахарь','трах'],['залупник','залуп'],['говнюк','говн'],['мудак','муд']];
+  const CM_TNOUN=[['пиздник','пизд'],['жопник','жоп'],['мудник','муд'],['сранник','срак'],['хуесос','хуй'],['сос','сос'],['сосун','сос'],['кал','кал'],['хер','хер'],['ёб','еб'],['ёбарь','еб'],['ёбщик','еб'],['блуд','блуд'],['блудник','блуд'],['хуярь','хуй'],['дрочун','дроч'],['пердун','перд'],['грызун','грыз'],['трахарь','трах'],['залупник','залуп'],['говнюк','говн'],['мудак','муд'],['тряс','тряс'],['звон','звон'],['грыз','грыз'],['рог','рог'],['берун','бер'],['ног','ног'],['член','член'],['гундос','гундос'],['хуй','хуй'],['мордик','морд']];
   const CM_SPICE_ADJ=['малопидохуий','низкосученогий','хуезломудый','мудомандапиздый','толстомелкохуехерый','малоопиздолюбопиздый','свиносвиноёбанный','мандаблядогондонный','пидосвинорыльный'];
   const CM_SPICE_NOUN=['мандахерокал','сучедолбоногец','мандапидоблуд','херохуечлен','мудонизкосранник'];
   function cmDict(){
@@ -1219,6 +1229,7 @@ function makePhraseCore(gender, batchCtx, allowTarget=true){
     // существовать только в словаре — они должны регулярно попадать внутрь
     // самой конструкции.
     'очень','сильно','чрезмерно','невероятно','абсолютно','аномально','ненормально',
+    'слизливо','несусветно','ёбнуто','неприлично','невообразимо','неслыханно','невыносимо','довольно',
     'немыслимо','непомерно','достаточно','чуточку','чуть-чуть','капельку','слегка',
     'немного','малость','едва ли','стопудово','впрямь','воистину','действительно',
     'в самом деле','поистине','совершенно','излишне','необоснованно','невероятно',
@@ -1233,6 +1244,7 @@ function makePhraseCore(gender, batchCtx, allowTarget=true){
 
   // Словарные составные слова. Эта ветка используется только когда
   // пользователь включил «Составные слова».
+  CM_ADV_LIST=ADV;
   const compoundAwareChoose=(pool,key)=>choose(pool,used,ctx.words,diversity,ctx);
   const word=(pool,key)=>{
     const x=compoundAwareChoose(pool,key);
@@ -1268,8 +1280,14 @@ function makePhraseCore(gender, batchCtx, allowTarget=true){
       if(/ь$/u.test(w)) return w.replace(/ь$/u,'и');
       return w;
     }
-    if(/нец$/u.test(w)) return w.replace(/ец$/u,'еца');
-    if(/ец$/u.test(w)) return w.replace(/ец$/u,'еца');
+    if(/ец$/u.test(w)){
+      // Беглый «е»: после «гласная/й + согласная» выпадает (американец → американца, тунеядец → тунеядца),
+      // после сочетания согласных остаётся (беглец → беглеца, подлец → подлеца); «еец» → «ейца» (индеец → индейца).
+      if(/еец$/u.test(w)) return w.replace(/еец$/u,'ейца');
+      if(/^(пиздец)$/u.test(w)) return w+'а'.replace(/^/,'');
+      if(/[аеёиоуыэюяй][бвгджзклмнпрстфхцчшщ]ец$/u.test(w)) return w.replace(/ец$/u,'ца');
+      return w.replace(/ец$/u,'еца');
+    }
     if(/ёнок$/u.test(w)) return w.replace(/ёнок$/u,'ёнка');
     if(/енок$/u.test(w)) return w.replace(/енок$/u,'енка');
     if(/онок$/u.test(w)) return w.replace(/онок$/u,'онка');
@@ -1285,7 +1303,11 @@ function makePhraseCore(gender, batchCtx, allowTarget=true){
     if(/й$/u.test(w)) return w.replace(/й$/u,'я');
     // «папа»-подобные мужские слова встречаются в словаре редко;
     // для них оставляем форму как есть, чтобы не получить явную ошибку.
-    if(/[аеёиоуыэюя]$/u.test(w)) return w;
+    if(/ия$/u.test(w)) return w.replace(/ия$/u,'ии');
+    if(/[жшчщгкх]а$/u.test(w)) return w.replace(/а$/u,'и');
+    if(/а$/u.test(w)) return w.replace(/а$/u,'ы');
+    if(/я$/u.test(w)) return w.replace(/я$/u,'и');
+    if(/[еёиоуыэю]$/u.test(w)) return w;
     return w+'а';
   }
 
@@ -1343,11 +1365,20 @@ function makePhraseCore(gender, batchCtx, allowTarget=true){
   // но оставляем маленький шанс случайно получить его как прилагательное.
   // Это сохраняет слово как пасхалку, не позволяя ему забивать выдачу.
   const RARE_ADJ=['хуедвупиздый'];
+  // 0.941: в архивных примерах около половины фраз содержат причастия/отглагольные прилагательные
+  // («эякулирующий», «кудахтающий», «обдрочившийся», «отраханный», «заёбанный»).
+  const PARTS=['курящий','кудахтающий','изнывающий','эякулирующий','обдрочившийся','ожиревший','отраханный','дрочканутый','заёбанный','недоссанный','попользованный','обкончанный','дрочащий','ссущий','срущий','пердящий','хрюкающий','воняющий','потеющий','слюнявящий','сопящий','чавкающий','обосравшийся','обделавшийся','опухший','облезший','засранный','обдолбанный','обтраханный','выебанный','отсосавший','зассанный','обкаканный','обоссанный','изуродованный','ёбнутый','кривляющийся','визжащий','гнусавящий','трясущийся'];
+  const CM_PART_P=0.14;
   const CM_ADJ_P=0.40, CM_NOUN_P=0.08;
   const adjective=(g)=>{
     if(chance(CM_ADJ_P)){
       const raw=generatedCompoundWord('adj',ctx);
       return compoundAdjectiveGender(sanitizeCompound(raw,'adj'),g);
+    }
+    if(chance(CM_PART_P)){
+      const base=choose(PARTS,used,ctx.words,diversity,ctx);
+      used.add(base); ctx.words.add(base);
+      return adjectiveForGender(base,g);
     }
     if(chance(0.012) && !(diversity>=1 && ctx.words.has(RARE_ADJ[0]))){
       const base=choose(RARE_ADJ,used,ctx.words,diversity,ctx);
@@ -1358,9 +1389,11 @@ function makePhraseCore(gender, batchCtx, allowTarget=true){
   };
   const A=(g,allowAdv=true)=>{
     const a=adjective(g);
-    return allowAdv && chance(.34) ? adv()+' '+a : a;
+    return allowAdv && chance(.52) ? adv()+' '+a : a;
   };
-  const A2=(g)=>A(g,false);
+  // 0.941: в архивных примерах наречие стоит почти перед каждым вторым прилагательным в перечислении
+  // («чрезмерно блядожопый, недоссанный и невероятно блядомордый»); двойные наречия отсекаются в makePhrase().
+  const A2=(g)=>{ const a=adjective(g); return chance(.30) ? adv()+' '+a : a; };
   // Управляющие существительные. Важно: роль определяется лексически,
   // а не по случайному окончанию слова. Старый вариант с regex вроде /арь|ор|щик/
   // превращал «мусор», «пылесос» и множество обычных существительных в
@@ -2054,14 +2087,21 @@ function makePhraseCore(gender, batchCtx, allowTarget=true){
   let out='';
   const oldWeight = length==='short' ? .64 : (length==='medium' ? .60 : .56);
   const cmTiny=()=>{
+    // Короткие формы из архивных примеров: «Имя, ты NOUN!», «Имя — NOUN!», «Имя — NOUN ADJ!», без цели: «ты NOUN!», «NOUN ADJ!».
     const g=chaos?groupGender():gender;
+    const noun=()=>{ const x=nounInfo(g); return x.target? word(g==='female'?DB.female:DB.male,'noun') : x.word; };
     const r=Math.random();
     let body;
-    if(r<.45) body=`ты ${nounInfo(g).word}`;
-    else if(r<.75) body=`ты ${adjective(g)}`;
-    else body=`${nounInfo(g).word} ${adjectiveForGender(word(DB.adj,'adj'),g)}`;
-    if(target && r<.45) body=`${target}, ${body}`;
-    return clean(body.endsWith('!')?body:body+'!');
+    if(target){
+      if(r<.40) body=`${target}, ты ${noun()}`;
+      else if(r<.75) body=`${target} — ${noun()}`;
+      else body=`${target} — ${noun()} ${adjectiveForGender(word(DB.adj,'adj'),g)}`;
+    }else{
+      if(r<.45) body=`ты ${noun()}`;
+      else if(r<.80) body=`${noun()} ${adjectiveForGender(word(DB.adj,'adj'),g)}`;
+      else body=`ты ${adjectiveForGender(word(DB.adj,'adj'),g)} ${noun()}`;
+    }
+    return clean(body+'!');
   };
   if(length==='short' && chance(.15)) out=cmTiny();
   else if(chaos && !target && chance(.22)) out=chaosLoosePhrase();
@@ -2112,23 +2152,100 @@ function cmFixTarget(out){
     return adj+' '+pool[Math.floor(Math.random()*pool.length)]+' ';
   });
 }
+function cmAdvRx(){
+  if(!CM_ADV_LIST) return null;
+  if(!CM_ADV_RX){
+    const alt=[...new Set(CM_ADV_LIST)].sort((x,y)=>y.length-x.length).map(x=>x.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')).join('|');
+    CM_ADV_RX=new RegExp('(?:^|[^а-яё-])(?:'+alt+')\\s+(?:'+alt+')(?![а-яё-])','iu');
+  }
+  return CM_ADV_RX;
+}
+let CM_ADV_ONE=null;
+function cmAdvOne(){
+  if(!CM_ADV_LIST) return null;
+  if(!CM_ADV_ONE){
+    const alt=[...new Set(CM_ADV_LIST)].sort((x,y)=>y.length-x.length).map(x=>x.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')).join('|');
+    CM_ADV_ONE=new RegExp('(?<![а-яё-])(?:'+alt+')(?![а-яё-])','giu');
+  }
+  CM_ADV_ONE.lastIndex=0; return CM_ADV_ONE;
+}
+// 0.941: в архивных примерах ~60% фраз содержат наречие, а перечисления часто идут как
+// «чрезмерно X, Y и невероятно Z». Если шаблон выдал мало усилителей — добавляем наречие перед
+// прилагательным, за которым идёт слово (т.е. оно стоит перед существительным или другим прилагательным).
+function cmAdvInject(out,tg){
+  const rx=cmAdvOne(); if(!rx) return out;
+  const have=(out.match(rx)||[]).length;
+  const p=have===0?.68:(have===1?.50:(have===2?.12:0));
+  if(Math.random()>=p) return out;
+  const parts=out.split(/(\s+)/);
+  const nameWords=new Set(String(tg||'').toLowerCase().split(/\s+/).filter(Boolean));
+  const idx=[];
+  for(let i=0;i<parts.length;i+=2){
+    const m=/^([а-яё]+(?:ый|ий|ой|ая|яя|ое|ее|ие|ые))(,?)$/iu.exec(parts[i]); if(!m) continue;
+    if(nameWords.has(m[1].toLowerCase())) continue;
+    const next=parts[i+2]; if(!next||!/^[а-яё]/iu.test(next)) continue;
+    const prev=(parts[i-2]||'').toLowerCase();
+    if(prev && !(prev==='ты'||prev==='—'||prev==='и'||prev.endsWith(','))) continue;
+    idx.push(i);
+  }
+  if(!idx.length) return out;
+  const i=idx[Math.floor(Math.random()*idx.length)];
+  const advs=[...new Set(CM_ADV_LIST)];
+  const a=advs[Math.floor(Math.random()*advs.length)];
+  parts[i]=a+' '+parts[i];
+  const res=parts.join('');
+  return cmPhraseBad(res)?out:res;
+}
 function cmPhraseBad(t){
   if(/ннн/u.test(t)) return true;
   if((t.match(/—/g)||[]).length>=2) return true;
+  const rx=cmAdvRx(); if(rx && rx.test(t)) return true;   // «очень чрезмерно …»
+  { const one=cmAdvOne(); if(one){ const m=t.toLowerCase().match(one)||[]; if(new Set(m).size!==m.length) return true; } }   // одно и то же наречие дважды («едва ли … едва ли»)
   const ws=(t.toLowerCase().match(/[а-яё]{5,}/gu)||[]);
   const tg=(typeof targetWordValue==='function'?targetWordValue():'').toLowerCase();
+  if(tg && t.toLowerCase().split(tg).length>2) return true;   // имя дважды: «Имя — Имя, ты …»
   const seen=new Set();
-  for(const w of ws){ if(tg&&tg.includes(w)) continue; if(seen.has(w)) return true; seen.add(w); }
+  for(const w of ws){
+    if(tg&&tg.includes(w)) continue;
+    const k=w.length>=9 ? w.slice(0,8) : (w.length>=6 ? w.slice(0,w.length-2) : w);   // жирдяя ≈ жирдяй
+    if(seen.has(k)) return true; seen.add(k);
+  }
   return false;
 }
+// Где стоит имя. В архивных примерах damn.ru имя всегда:
+//  • в начале: «Имя — …», «Имя, ты …»;
+//  • после эпитета, с продолжением после тире: «[ADV] ADJ… NOUN Имя — …».
+// Имя в конце («…, Имя!»), двоеточие и «— ты» там не встречаются.
+function cmNameFamily(out,tg){
+  const i=out.toLowerCase().indexOf(tg.toLowerCase()); if(i<0) return 'bad';
+  const after=out.slice(i+tg.length), before=out.slice(0,i);
+  if(i===0) return (/^ — [^—]+!$/u.test(after) && !/^ — ты /u.test(after)) || /^, ты [^—:]+!$/u.test(after) ? 'start' : 'bad';
+  if(/^ — [^—]+!$/u.test(after) && !/^ — ты /u.test(after) && /[а-яё]\s$/iu.test(before) && !/[—:,!]/u.test(before.replace(/,\s/g,' ').replace(/,$/,''))) return 'epithet';
+  return 'bad';
+}
+function cmConvert(out,tg){
+  const esc=tg.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  let m=new RegExp('^('+esc+'): (.+)!$','iu').exec(out); if(m) return `${m[1]} — ${m[2]}!`;
+  m=new RegExp('^('+esc+'), (?!ты )([^—:]+)!$','iu').exec(out); if(m) return `${m[1]}, ты ${m[2]}!`;
+  m=new RegExp('^([^—:]+?),? ('+esc+')!$','iu').exec(out); if(m && !/^ты /iu.test(m[1])) return `${m[2]}, ты ${m[1]}!`;
+  return null;
+}
 function makePhrase(gender, batchCtx, allowTarget=true){
-  let out='';
-  for(let i=0;i<8;i++){
+  const tg=(allowTarget!==false && typeof targetWordValue==='function')?targetWordValue():'';
+  const want=Math.random()<.46?'epithet':'start';
+  let out='', fallback=null, firstGood=null;
+  for(let i=0;i<(tg?20:8);i++){
     out=makePhraseCore(gender,batchCtx,allowTarget);
     if(allowTarget!==false) out=cmFixTarget(out);
-    if(!cmPhraseBad(out)) break;
+    if(cmPhraseBad(out)) continue;
+    if(!tg) return cmAdvInject(out,tg);
+    let fam=cmNameFamily(out,tg);
+    if(fam==='bad'){ const cv=cmConvert(out,tg); if(cv && !cmPhraseBad(cv) && cmNameFamily(cv,tg)!=='bad'){ out=cv; fam=cmNameFamily(cv,tg); } }
+    if(fam===want) return cmAdvInject(out,tg);
+    if(fam!=='bad' && !fallback) fallback=out;
+    if(!firstGood) firstGood=out;
   }
-  return out;
+  return cmAdvInject(fallback||firstGood||out,tg);
 }
 function malePhrase(){ return makePhrase('male'); }
 function femalePhrase(){ return makePhrase('female'); }
@@ -2433,7 +2550,7 @@ async function clearName(env,chatId,uid){
 }
 
 function versionText(){
-  return `Генератор Мата ${VERSION}\nДвижок составных слов: морфемная склейка (всегда включена)\nСловарь: ${DB.male.length} муж. / ${DB.female.length} жен. / ${DB.adj.length} прил.`;
+  return `Генератор Мата ${VERSION}\nСборка: ${BUILD_NOTE}\nСловарь: ${DB.male.length} муж. / ${DB.female.length} жен. / ${DB.adj.length} прил.`;
 }
 
 function groupHelpText(){
@@ -2527,6 +2644,7 @@ const STATS_KEY='stats:v1';
 const STATS_FLUSH_MS=8000;
 const STATS_KEEP_DAYS=40;
 const STATS_MAX_TARGETS=300;
+let CM_ADV_LIST=null, CM_ADV_RX=null;
 let statsDelta=null, statsLastFlush=0, statsMemory=null;
 
 const newStatsBag=()=>({tot:{},users:{},days:{},targets:{}});
