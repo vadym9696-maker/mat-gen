@@ -1039,15 +1039,56 @@ function compoundNounGender(wordValue,g){
   for(const [rx,r] of R) if(rx.test(w)) return w.replace(rx,r);
   return /[ая]$/u.test(w) ? w : (/[йь]$/u.test(w) ? w.slice(0,-1)+'ка' : w+'ка');
 }
+// Дополнительные списки для «рецептов» (0.941):
+const CM_NUM_PRE=['трое','полу','много','пяти','сто','десяти','мало','полно'];   // трое+дву+пиздый
+const CM_PFX_X=['о','за','про','по','на','раз','при','под','вы'];             // о+пиздо+пиздый
+function cmOk(w,maxLen,dup,dict){
+  if(w.length<6||w.length>maxLen) return false;
+  if(!/^[а-яё]+$/u.test(w)) return false;
+  if(dict.has(w)) return false;
+  if(!dup&&/(.{4,}).*\1/u.test(w)) return false;
+  if(/ннн|(.)\1\1|[аеёиоуыэюя]{3,}|[оеаыи][оеаыи]ый$/u.test(w)) return false;
+  return true;
+}
 function buildCompound(kind){
   const dict=cmDict();
   const TERMS=kind==='adj'?CM_TADJ:CM_TNOUN;
   const maxLen=kind==='adj'?19:20;   // в архивных примерах самое длинное — 19–20 символов
   for(let attempt=0;attempt<80;attempt++){
+    const q=Math.random();
+    // --- 1. «рецепты» нестандартных, но узнаваемых композитов (собираются случайно, не из словаря) ---
+    if(q<.30){
+      const term=pickArr(TERMS), prof=CM_PROF.has(term[1]); const k=Math.random();
+      let w='', dup=false;
+      if(k<.30){            // корень + множитель + терминал:   хуе+дву+пиздый, мудо+трёх+жопый
+        const ro=pickArr(CM_ROOT); if(ro[1]===term[1]) continue;
+        w=cmJoin(cmJoin(ro[0],pickArr(CM_NUM)),term[0]);
+      }else if(k<.50){      // цепочка множителей без корня:     трое+дву+пиздый, много+пяти+хуевый
+        if(!prof) continue;
+        const x=pickArr(CM_NUM_PRE), y=pickArr(CM_NUM); if(x===y) continue;
+        w=cmJoin(cmJoin(x,y),term[0]);
+      }else if(k<.72){      // приставка + удвоенный корень:      о+пиздо+пиздый, за+хуе+хуевый
+        const ro=pickArr(CM_ROOT); const same=TERMS.filter(t=>t[1]===ro[1]); if(!same.length) continue;
+        w=cmJoin(cmJoin(pickArr(CM_PFX_X),ro[0]),pickArr(same)[0]); dup=true;
+      }else{                // усилитель + матерный терминал:     свино+пиздый, ското+хуевый
+        if(!prof) continue;
+        w=cmJoin(pickArr(CM_PRE),term[0]);
+      }
+      if(cmOk(w,maxLen,dup,dict)) return w;
+      continue;
+    }
+    // --- 2. короткие композиты: корень + терминал (хуемуд, пиздодуй, жопоног) ---
+    if(q<.52){
+      const term=pickArr(TERMS), ro=pickArr(CM_ROOT);
+      if(ro[1]===term[1]) continue;
+      const w=cmJoin(ro[0],term[0]);
+      if(cmOk(w,12,false,dict)) return w;
+      continue;
+    }
+    // --- 3. обычная сборка: [приставка?] [усилители 0–2] [корни 1–3] [множитель?] терминал ---
     const term=pickArr(TERMS);
     const r=Math.random();
     const useMid=Math.random()<.12;
-    // приставка («о-», «за-», «про-»…) — только если нет усилителей
     let nPre=r<.54?0:(r<.93?1:2);
     if(kind==='noun'&&nPre>1) nPre=1;
     const pfx=(nPre===0&&Math.random()<.10)?pickArr(CM_PFX):'';
@@ -1073,13 +1114,7 @@ function buildCompound(kind){
     for(const x of roots) w=cmJoin(w,x);
     if(mid) w=cmJoin(w,mid);
     w=cmJoin(w,term[0]);
-    if(w.length<7||w.length>maxLen) continue;
-    if(!/^[а-яё]+$/u.test(w)) continue;
-    if(dict.has(w)) continue;
-    if(!allowDup&&/(.{4,}).*\1/u.test(w)) continue;
-    if(/ннн|(.)\1\1|[аеёиоуыэюя]{3,}|[оеаыи][оеаыи]ый$/u.test(w)) continue;
-    if(/[ъь]/u.test(w.slice(0,-2))) continue;
-    return w;
+    if(cmOk(w,maxLen,allowDup,dict)) return w;
   }
   // запасной вариант тоже генерируется (не из списка)
   return cmJoin(pickArr(CM_ROOT)[0],pickArr(TERMS)[0]);
@@ -1100,7 +1135,7 @@ function generatedCompoundWord(kind,ctx){
   return best;
 }
 const CM_PROF=new Set(['пизд','хуй','муд','жоп','хер','еб','срак','бляд','сос','манд','суч','дроч','трах','перд','залуп','член','дрист','говн','гонд','сса','бзд','кал']);
-const CM_LEX={PROF:CM_PROF,PFX:CM_PFX,PRE:CM_PRE,MID:CM_MID,ROOT:CM_ROOT,TADJ:CM_TADJ,TNOUN:CM_TNOUN};
+const CM_LEX={NUM:CM_NUM,NUM_PRE:CM_NUM_PRE,PFX_X:CM_PFX_X,PROF:CM_PROF,PFX:CM_PFX,PRE:CM_PRE,MID:CM_MID,ROOT:CM_ROOT,TADJ:CM_TADJ,TNOUN:CM_TNOUN};
 
 function makePhraseCore(gender, batchCtx, allowTarget=true){
   const ctx = batchCtx || {words:new Set(),schemes:new Set(),advs:new Set(),freq:new Map(),roleRecent:[],compoundFreq:new Map()};
@@ -1277,7 +1312,7 @@ function makePhraseCore(gender, batchCtx, allowTarget=true){
   // («эякулирующий», «кудахтающий», «обдрочившийся», «отраханный», «заёбанный»).
   const PARTS=['курящий','кудахтающий','изнывающий','эякулирующий','обдрочившийся','ожиревший','отраханный','дрочканутый','заёбанный','недоссанный','попользованный','обкончанный','дрочащий','ссущий','срущий','пердящий','хрюкающий','воняющий','потеющий','слюнявящий','сопящий','чавкающий','обосравшийся','обделавшийся','опухший','облезший','засранный','обдолбанный','обтраханный','выебанный','отсосавший','зассанный','обкаканный','обоссанный','изуродованный','ёбнутый','кривляющийся','визжащий','гнусавящий','трясущийся'];
   const CM_PART_P=0.24;
-  const CM_ADJ_P=0.62, CM_NOUN_P=0.15;
+  const CM_ADJ_P=0.58, CM_NOUN_P=0.13;
   const adjective=(g)=>{
     if(chance(CM_ADJ_P)){
       const raw=generatedCompoundWord('adj',ctx);
@@ -2055,6 +2090,7 @@ function cmFixTarget(out){
     return adj+' '+pool[Math.floor(Math.random()*pool.length)]+' ';
   });
 }
+let CM_ADV_LIST=null, CM_ADV_RX=null;
 function cmAdvRx(){
   if(!CM_ADV_LIST) return null;
   if(!CM_ADV_RX){
@@ -2238,7 +2274,7 @@ function generateBatch(options={}){
   return out;
 }
 
-export { DB, runtimeSettings, generateBatch, generateText, makePhrase, VERSION, CM_LEX };
+export { DB, runtimeSettings, generateBatch, generateText, makePhrase, VERSION, CM_LEX, buildCompound };
 export function setSettings(options={}){ Object.assign(runtimeSettings, options); return runtimeSettings; }
 
 // ===== Telegram / Cloudflare Workers adapter =====
@@ -2547,7 +2583,6 @@ const STATS_KEY='stats:v1';
 const STATS_FLUSH_MS=8000;
 const STATS_KEEP_DAYS=40;
 const STATS_MAX_TARGETS=300;
-let CM_ADV_LIST=null, CM_ADV_RX=null;
 let statsDelta=null, statsLastFlush=0, statsMemory=null;
 
 const newStatsBag=()=>({tot:{},users:{},days:{},targets:{}});
