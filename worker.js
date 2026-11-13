@@ -1,9 +1,9 @@
-// Generator core extracted from ГЕНЕРАТОР МАТА 0.940.
+// Generator core extracted from ГЕНЕРАТОР МАТА 0.941.
 // Telegram adapter supplies the small DOM-like settings interface used by the original engine.
 'use strict';
 
-const VERSION = '0.940';
-const BUILD_NOTE = 'составные слова генерируются из морфем (без глоссария) + аутентичная расстановка имени/наречий (v3)';
+const VERSION = '0.941';
+const BUILD_NOTE = 'составные из морфем без глоссария, схемы «изо»/«троемудак», аутентичная расстановка имени/наречий (v5)';
 
 const runtimeSettings = {
   diversity: 50,
@@ -1047,24 +1047,24 @@ const CM_PFX_X=['о','за','про','по','на','раз','при','под','�
 // k — для какого вида слова схема годится ('adj' — прилагательное/основа, 'noun' — существительное),
 // w — вес при выборе схемы, d — разрешён ли повтор семьи в рецепте («суче+сучий», «хуе+хуй»).
 const CM_ISO=['изо'];
-const CM_SCHEME_P=0.07;   // доля сборок, идущих по схемам (остальное — прежние ветки без изменений)
+const CM_SCHEME_P=0.16;   // доля сборок, идущих по схемам (остальное — прежние ветки без изменений)
 const CM_SCHEMES=[
   {n:'ISO+ROOT',            k:'adj',  w:1, d:0, s:['ISO','ROOT']},
   {n:'ISO+TADJ',            k:'adj',  w:5, d:0, s:['ISO','TADJ']},
   {n:'ISO+TNOUN',           k:'noun', w:5, d:0, s:['ISO','TNOUN']},
   {n:'ISO+ROOT+TADJ',       k:'adj',  w:5, d:1, s:['ISO','ROOT','TADJ']},
-  {n:'ISO+ROOT+ROOT+TADJ',  k:'adj',  w:2, d:1, s:['ISO','ROOT','ROOT','TADJ']},
-  {n:'ISO+PRE+ROOT+TADJ',   k:'adj',  w:2, d:0, s:['ISO','PRE','ROOT','TADJ']},
+  {n:'ISO+ROOT+ROOT+TADJ',  k:'adj',  w:3, d:1, s:['ISO','ROOT','ROOT','TADJ']},
+  {n:'ISO+PRE+ROOT+TADJ',   k:'adj',  w:4, d:0, s:['ISO','PRE','ROOT','TADJ']},
   {n:'PRE+ROOT+TADJ',       k:'adj',  w:7, d:1, s:['PRE','ROOT','TADJ']},
-  {n:'PRE+TNOUN',           k:'noun', w:6, d:0, p:1, s:['PRE','TNOUN']},   // троемудак, свинопиздюк (p — без корня терминал только матерный)
+  {n:'PRE+TNOUN',           k:'noun', w:7, d:0, p:1, s:['PRE','TNOUN']},   // троемудак, свинопиздюк (p — без корня терминал только матерный)
   {n:'PRE+MID+TNOUN',       k:'noun', w:5, d:0, s:['PRE','MID','TNOUN']},
   {n:'ROOT+ROOT',           k:'adj',  w:1, d:1, s:['ROOT','ROOT']},
   {n:'ROOT+TADJ',           k:'adj',  w:8, d:1, s:['ROOT','TADJ']},
   {n:'ROOT+TNOUN',          k:'noun', w:8, d:1, s:['ROOT','TNOUN']},
-  {n:'PRE+MID+ROOT+TADJ',   k:'adj',  w:4, d:0, s:['PRE','MID','ROOT','TADJ']},
-  {n:'PRE+MID+ROOT+TNOUN',  k:'noun', w:4, d:0, s:['PRE','MID','ROOT','TNOUN']},
-  {n:'ROOT+NUM+TADJ',       k:'adj',  w:3, d:1, s:['ROOT','NUM','TADJ']},
-  {n:'PFX+ROOT+TADJ',       k:'adj',  w:3, d:1, s:['PFX','ROOT','TADJ']}
+  {n:'PRE+MID+ROOT+TADJ',   k:'adj',  w:5, d:0, s:['PRE','MID','ROOT','TADJ']},
+  {n:'PRE+MID+ROOT+TNOUN',  k:'noun', w:5, d:0, s:['PRE','MID','ROOT','TNOUN']},
+  {n:'ROOT+NUM+TADJ',       k:'adj',  w:4, d:1, s:['ROOT','NUM','TADJ']},
+  {n:'PFX+ROOT+TADJ',       k:'adj',  w:4, d:1, s:['PFX','ROOT','TADJ']}
 ];
 const CM_SLOT={ISO:CM_ISO,PFX:CM_PFX,PRE:CM_PRE,MID:CM_MID,NUM:CM_NUM,ROOT:CM_ROOT,TADJ:CM_TADJ,TNOUN:CM_TNOUN};
 function cmPickScheme(kind){
@@ -1364,7 +1364,7 @@ function makePhraseCore(gender, batchCtx, allowTarget=true){
   // («эякулирующий», «кудахтающий», «обдрочившийся», «отраханный», «заёбанный»).
   const PARTS=['курящий','кудахтающий','изнывающий','эякулирующий','обдрочившийся','ожиревший','отраханный','дрочканутый','заёбанный','недоссанный','попользованный','обкончанный','дрочащий','ссущий','срущий','пердящий','хрюкающий','воняющий','потеющий','слюнявящий','сопящий','чавкающий','обосравшийся','обделавшийся','опухший','облезший','засранный','обдолбанный','обтраханный','выебанный','отсосавший','зассанный','обкаканный','обоссанный','изуродованный','ёбнутый','кривляющийся','визжащий','гнусавящий','трясущийся'];
   const CM_PART_P=0.24;
-  const CM_ADJ_P=0.58, CM_NOUN_P=0.13;
+  const CM_ADJ_P=0.58, CM_NOUN_P=0.16;
   const adjective=(g)=>{
     if(chance(CM_ADJ_P)){
       const raw=generatedCompoundWord('adj',ctx);
