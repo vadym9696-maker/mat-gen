@@ -1,9 +1,9 @@
-// Generator core extracted from ГЕНЕРАТОР МАТА 0.942.
+// Generator core extracted from ГЕНЕРАТОР МАТА 0.943.
 // Telegram adapter supplies the small DOM-like settings interface used by the original engine.
 'use strict';
 
-const VERSION = '0.942';
-const BUILD_NOTE = 'приставки (изо-, под-…) в общем пуле, без недоделанных основ, «ъ» после приставок (v6)';
+const VERSION = '0.943';
+const BUILD_NOTE = 'разнообразие 0–100% (фокус пачки), аудит статистики, обработчик вебхука (v7)';
 
 const runtimeSettings = {
   diversity: 50,
@@ -64,76 +64,79 @@ function shuffle(a){
   return a;
 }
 
+// ===== Разнообразие (0.943) =====
+// Раньше 0%…100% почти не различались: пулы слов огромные, поэтому повторы в пачке редки при любом значении.
+// Теперь ползунок меняет «ширину» выбора внутри пачки (одной генерации):
+//   0%   — узкий фокус: на пачку берётся случайная ~5% часть пула (слова, наречия, корни, приставки, терминалы,
+//          20% схем), а уже встречавшиеся слова получают БОНУС — пачка «однотемная», с заметными повторами;
+//   50%  — около трети пула и мягкий анти-повтор;
+//   100% — весь пул и жёсткое «не повторять», схемы идут по кругу.
+// Фокус задаётся хэшем слова и случайным зерном пачки (ctx.seed), поэтому он не требует хранения списков.
+function divFocusFrac(d){ return Math.min(1,Math.max(0.05,0.05+0.95*d*d)); }     // 0% → 5% пула, 50% → ~29%, 75% → ~58%, 100% → весь пул
+function divSchemeFrac(d){ return Math.min(1,Math.max(0.2,0.2+0.8*d*d)); }
+function divSeed(ctx){ if(ctx.seed==null) ctx.seed=(Math.random()*4294967296)>>>0; return ctx.seed; }
+function divHash(str,seed){
+  let h=(2166136261^seed)>>>0;
+  for(let i=0;i<str.length;i++) h=Math.imul(h^str.charCodeAt(i),16777619)>>>0;
+  h^=h>>>13; h=Math.imul(h,0x5bd1e995)>>>0; h^=h>>>15;
+  return (h>>>0)/4294967296;
+}
+function divInFocus(x,frac,ctx){
+  const hc=ctx.hcache||(ctx.hcache=new Map());
+  let h=hc.get(x);
+  if(h===undefined){ h=divHash(String(Array.isArray(x)?x[0]:(x&&x.id!=null?x.id:x)),divSeed(ctx)); hc.set(x,h); }
+  return h<frac;
+}
+// Вес слова, которое уже было в этой фразе (lw) / в этой пачке (bw): >1 — бонус повтору, <1 — штраф.
+function divWeights(d){
+  const lw = d<.5 ? 1-(1-.55)*(d/.5) : .55-(.55-.035)*((d-.5)/.5);
+  const bw = d<.5 ? 2.6-(2.6-.7)*(d/.5) : .7-(.7-.06)*((d-.5)/.5);
+  return {lw,bw};
+}
+
 function choose(arr, localUsed, batchUsed, diversityOverride, ctx){
   const diversity = diversityOverride == null
     ? Number(document.querySelector('#diversity').value) / 100
     : diversityOverride;
   if(!arr || !arr.length) return '';
-
-  // 0% = чистый рандом. Никаких анти-повторов: генератор берёт слово
-  // напрямую из исходного пула, как старый генератор мог делать.
-  if(diversity <= 0) return pick(arr);
+  ctx = ctx || {};
 
   const local = localUsed || new Set();
   const batch = batchUsed || new Set();
 
-  // Разнообразие теперь не означает «запретить всё уже использованное».
-  // Это плавная вероятность штрафа:
-  //   0%   — полностью случайно;
-  //   50%  — мягкий анти-повтор, нормальный режим;
-  //   100% — жёсткое исключение уже использованного до исчерпания пула.
-  // Так повтор слова в одной фразе возможен, но на 50% не превращается
-  // в постоянное дублирование.
+  // 100% — жёсткое исключение уже использованного до исчерпания пула.
   if(diversity >= 1){
     const freshLocal = arr.filter(x=>!local.has(x));
-    // Сначала слово, которое не встречалось ни в текущей фразе, ни в пачке.
     const batchFreshLocal=freshLocal.filter(x=>!batch.has(x));
     if(batchFreshLocal.length) return pick(batchFreshLocal);
-    // Если локально свободных слов больше нет, допускаем слово, ещё не
-    // встречавшееся в пачке. Повтор возможен только после реального
-    // исчерпания конкретного пула.
     if(freshLocal.length) return pick(freshLocal);
     const freshGlobal=arr.filter(x=>!batch.has(x));
     if(freshGlobal.length) return pick(freshGlobal);
     return pick(arr);
   }
 
-  // Вес уже использованного слова уменьшается постепенно. При 50%:
-  // повтор внутри текущей фразы получает примерно 58% обычного веса,
-  // повтор из предыдущих строк — примерно 68%. При 100% эти веса
-  // обнуляются через ветку выше.
-  const localPenalty = Math.max(0.035, 1 - 1.75*diversity);
-  const batchPenalty = Math.max(0.06, 1 - 1.45*diversity);
-  const freq = ctx.freq || (ctx.freq = new Map());
-  // 0.941: сначала выбор отбраковкой (все веса ≤ 1, поэтому распределение то же, что у полного прохода,
-  // но стоимость почти O(1)); если пул почти исчерпан — полный взвешенный проход ниже.
-  {
-    const m=arr.length;
-    for(let t=0;t<40;t++){
-      const x=arr[Math.floor(Math.random()*m)];
-      const f=freq.get(x)||0;
-      const w=(local.has(x) ? localPenalty : (batch.has(x) ? batchPenalty : 1))*(f>0 ? Math.pow(0.62, Math.min(f,4)) : 1);
-      if(w>=1 || Math.random()<w) return x;
-    }
+  // 0…99% — фокус пачки + плавный бонус/штраф повтору.
+  const {lw,bw}=divWeights(diversity);
+  const frac=divFocusFrac(diversity);
+  const focus=arr.length>=14 && frac<1;
+  const fs=Math.min(1,diversity*2);                       // сила штрафа за частоту: на 0% её нет
+  const freq=ctx.freq || (ctx.freq = new Map());
+  const wmax=Math.max(1,bw,lw);
+  const wOf=x=>{ const f=freq.get(x)||0; return (local.has(x)?lw:(batch.has(x)?bw:1))*(f>0?Math.pow(0.62,Math.min(f,4)*fs):1); };
+  // выбор отбраковкой: стоимость почти O(1) даже для пулов в тысячи слов
+  for(let t=0;t<(focus?90:40);t++){
+    const x=arr[Math.floor(Math.random()*arr.length)];
+    if(focus && !divInFocus(x,frac,ctx)) continue;
+    if(Math.random()*wmax<wOf(x)) return x;
   }
-  const n=arr.length;
-  const W=(choose._buf && choose._buf.length>=n) ? choose._buf : (choose._buf=new Float64Array(Math.max(n,1024)));
-  let total=0;
-  for(let i=0;i<n;i++){
-    const x=arr[i];
-    const f=freq.get(x)||0;
-    // Повтор одного и того же слова несколько раз в пачке получает дополнительный плавный штраф
-    // (важно для маленьких пулов вроде role-слов).
-    const repeatPenalty = f>0 ? Math.pow(0.62, Math.min(f,4)) : 1;
-    const w=(local.has(x) ? localPenalty : (batch.has(x) ? batchPenalty : 1))*repeatPenalty;
-    W[i]=w; total+=w;
-  }
+  // запасной полный проход: только слова фокуса (если они есть), иначе весь пул
+  let cand=arr;
+  if(focus){ const sub=arr.filter(x=>divInFocus(x,frac,ctx)); if(sub.length) cand=sub; }
+  let total=0; const W=new Array(cand.length);
+  for(let i=0;i<cand.length;i++){ W[i]=wOf(cand[i]); total+=W[i]; }
   let r=Math.random()*total;
-  for(let i=0;i<n;i++){
-    r-=W[i];
-    if(r<=0) return arr[i];
-  }
-  return arr[n-1];
+  for(let i=0;i<cand.length;i++){ r-=W[i]; if(r<=0) return cand[i]; }
+  return cand[cand.length-1];
 }
 
 // 0.810: реестр схем должен быть доступен schemePick().
@@ -166,6 +169,11 @@ function schemePick(pool, key, ctx, diversity){
   const ordinary=pool.filter(x=>!SCHEME_META.rare.has(x.id));
   let active=pool;
   if(rare.length && ordinary.length) active=chance(0.045)?rare:ordinary;
+  // 0.943: на низком разнообразии пачка берёт лишь часть схем (на 0% — около пятой части)
+  if(diversity<1 && active.length>=6){
+    const fr=divSchemeFrac(diversity), sub=active.filter(x=>divInFocus(x,fr,ctx));
+    if(sub.length>=2) active=sub;
+  }
 
   function weight(x){
     let w=1;
@@ -1089,8 +1097,11 @@ function cmOk(w,maxLen,dup,dict){
   if(/ннн|(.)\1\1|[аеёиоуыэюя]{3,}|[оеаыи][оеаыи]ый$/u.test(w)) return false;
   return true;
 }
-function buildCompound(kind){
+function buildCompound(kind,ctx,div){
   const dict=cmDict();
+  // 0.943: при ctx и div<1 морфемы берутся из «фокуса» пачки (на 0% — около 5% пула), иначе — равномерно, как раньше
+  const fr=(ctx&&div!=null&&div<1)?divFocusFrac(div):1;
+  const pk=fr<1?(arr=>{for(let t=0;t<60;t++){const x=arr[Math.floor(Math.random()*arr.length)];if(divInFocus(x,fr,ctx))return x;}return pickArr(arr);}):pickArr;
   const TERMS=kind==='adj'?CM_TADJ:CM_TNOUN;
   const maxLen=kind==='adj'?19:20;   // в архивных примерах самое длинное — 19–20 символов
   for(let attempt=0;attempt<80;attempt++){
@@ -1100,7 +1111,7 @@ function buildCompound(kind){
       const sch=cmPickScheme(kind);
       const dr=Math.random();
       const dup=!!sch.d && dr<.22;                         // повтор семьи — только в «своих» рецептах
-      const picks=sch.s.map(sl=>pickArr(CM_SLOT[sl]));
+      const picks=sch.s.map(sl=>pk(CM_SLOT[sl]));
       const keys=picks.filter(Array.isArray).map(x=>x[1]);
       const strs=picks.filter(x=>!Array.isArray(x));
       if(!dup && (new Set(keys).size!==keys.length || new Set(strs).size!==strs.length)) continue;
@@ -1113,56 +1124,56 @@ function buildCompound(kind){
     q=(q-CM_SCHEME_P)/(1-CM_SCHEME_P);
     // --- 1. «рецепты» нестандартных, но узнаваемых композитов (собираются случайно, не из словаря) ---
     if(q<.30){
-      const term=pickArr(TERMS), prof=CM_PROF.has(term[1]); const k=Math.random();
+      const term=pk(TERMS), prof=CM_PROF.has(term[1]); const k=Math.random();
       let w='', dup=false;
       if(k<.30){            // корень + множитель + терминал:   хуе+дву+пиздый, мудо+трёх+жопый
-        const ro=pickArr(CM_ROOT); if(ro[1]===term[1]) continue;
-        w=cmJoin(cmJoin(ro[0],pickArr(CM_NUM)),term[0]);
+        const ro=pk(CM_ROOT); if(ro[1]===term[1]) continue;
+        w=cmJoin(cmJoin(ro[0],pk(CM_NUM)),term[0]);
       }else if(k<.50){      // цепочка множителей без корня:     трое+дву+пиздый, много+пяти+хуевый
         if(!prof) continue;
-        const x=pickArr(CM_NUM_PRE), y=pickArr(CM_NUM); if(x===y) continue;
+        const x=pk(CM_NUM_PRE), y=pk(CM_NUM); if(x===y) continue;
         w=cmJoin(cmJoin(x,y),term[0]);
       }else if(k<.72){      // приставка + удвоенный корень:      о+пиздо+пиздый, за+хуе+хуевый
-        const ro=pickArr(CM_ROOT); const same=TERMS.filter(t=>t[1]===ro[1]); if(!same.length) continue;
-        w=cmJoin(cmJoin(pickArr(CM_PFX_X),ro[0]),pickArr(same)[0]); dup=true;
+        const ro=pk(CM_ROOT); const same=TERMS.filter(t=>t[1]===ro[1]); if(!same.length) continue;
+        w=cmJoin(cmJoin(pk(CM_PFX_X),ro[0]),pk(same)[0]); dup=true;
       }else{                // усилитель + матерный терминал:     свино+пиздый, ското+хуевый
         if(!prof) continue;
-        w=cmJoin(pickArr(CM_PRE),term[0]);
+        w=cmJoin(pk(CM_PRE),term[0]);
       }
       if(cmOk(w,maxLen,dup,dict)) return w;
       continue;
     }
     // --- 2. короткие композиты: корень + терминал (хуемуд, пиздодуй, жопоног) ---
     if(q<.52){
-      const term=pickArr(TERMS), ro=pickArr(CM_ROOT);
+      const term=pk(TERMS), ro=pk(CM_ROOT);
       if(ro[1]===term[1]) continue;
       const w=cmJoin(ro[0],term[0]);
       if(cmOk(w,12,false,dict)) return w;
       continue;
     }
     // --- 3. обычная сборка: [приставка?] [усилители 0–2] [корни 1–3] [множитель?] терминал ---
-    const term=pickArr(TERMS);
+    const term=pk(TERMS);
     const r=Math.random();
     const useMid=Math.random()<.12;
     let nPre=r<.54?0:(r<.93?1:2);
     if(kind==='noun'&&nPre>1) nPre=1;
-    const pfx=(nPre===0&&Math.random()<.17)?pickArr(CM_PFX):'';
+    const pfx=(nPre===0&&Math.random()<.17)?pk(CM_PFX):'';
     const rr=Math.random();
     let nRoot=rr<.70?1:(rr<.98?2:3);
     if(nPre+nRoot+(useMid?1:0)>4) nRoot=Math.max(1,4-nPre-(useMid?1:0));
     if(nPre>=1 && CM_PROF.has(term[1]) && Math.random()<.26) nRoot=0;
     const allowDup=Math.random()<.04;
     const keys=new Set([term[1]]);
-    const pre=[]; for(let i=0;i<nPre;i++) pre.push(pickArr(CM_PRE));
+    const pre=[]; for(let i=0;i<nPre;i++) pre.push(pk(CM_PRE));
     if(new Set(pre).size!==pre.length && !(Math.random()<.04)) continue;   // «свиносвиноёбанный» бывает, но редко
     const roots=[]; let ok=true;
     for(let i=0;i<nRoot;i++){
-      const ro=pickArr(CM_ROOT);
+      const ro=pk(CM_ROOT);
       if(!allowDup&&keys.has(ro[1])){ok=false;break;}
       keys.add(ro[1]); roots.push(ro[0]);
     }
     if(!ok) continue;
-    const mid=useMid?pickArr(CM_MID):'';
+    const mid=useMid?pk(CM_MID):'';
     if(mid && (pre.includes(mid))) continue;
     let w=pfx;
     for(const p of pre) w=cmJoin(w,p);
@@ -1172,16 +1183,16 @@ function buildCompound(kind){
     if(cmOk(w,maxLen,allowDup,dict)) return w;
   }
   // запасной вариант тоже генерируется (не из списка)
-  return cmJoin(pickArr(CM_ROOT)[0],pickArr(TERMS)[0]);
+  return cmJoin(pk(CM_ROOT)[0],pk(TERMS)[0]);
 }
 function generatedCompoundWord(kind,ctx){
   const freq=ctx.compoundFreq||(ctx.compoundFreq=new Map());
   const diversity=Number(document.querySelector('#diversity').value)/100;
   let best='',bestScore=Infinity;
   for(let i=0;i<8;i++){
-    const cand=buildCompound(kind);
+    const cand=buildCompound(kind,ctx,diversity);
     const f=freq.get(cand)||0;
-    const score=f*(0.5+diversity*2)+Math.random();
+    const score=f*((diversity-0.35)*5)+Math.random();   // <35% повтор слова предпочитается, >35% — штрафуется
     if(score<bestScore){best=cand;bestScore=score;}
     if(f===0&&diversity>=.5) break;
     if(diversity<=.12&&i===0) break;
@@ -1594,7 +1605,15 @@ function makePhraseCore(gender, batchCtx, allowTarget=true){
   }
 
   let length=document.querySelector('#length').value;
-  if(length==='random') length=pick(['short','medium','long']);
+  if(length==='random'){
+    // 0.943: разнообразие влияет и на структуру. Низкое — пачка держится одной длины, высокое — длины чередуются.
+    const LENS=['short','medium','long'];
+    const stick=diversity<.5?(.5-diversity)*1.7:0, rotate=diversity>=.5?(diversity-.5)*1.8:0;
+    if(ctx.lastLen && Math.random()<stick) length=ctx.lastLen;
+    else if(ctx.lastLen && Math.random()<rotate) length=pick(LENS.filter(x=>x!==ctx.lastLen));
+    else length=pick(LENS);
+    ctx.lastLen=length;
+  }
 
   // В архивных скриншотах начальное «—» / «, ты» это визуальный остаток
   // пустого поля обращения. В генераторной схеме тире имеет смысл только
@@ -2037,18 +2056,27 @@ function makePhraseCore(gender, batchCtx, allowTarget=true){
     return 'noun';
   }
   function constructionPhrase(){
+    // 0.943: на низком разнообразии (0…50%) пачка с вероятностью до 85% повторяет прошлое семейство конструкции.
+    const stick=diversity<.5?(.5-diversity)*1.7:0;
+    if(ctx.lastFam && Math.random()<stick){
+      for(let i=0;i<10;i++){
+        const o=constructionPhraseRaw(), f=constructionFamily(o);
+        if(f===ctx.lastFam){ ctx.schemes.add('base:'+f); return o; }
+      }
+    }
     // Повторяем только при совпадении семейства конструкции. Слова по-прежнему
     // выбираются прежним механизмом diversity, поэтому мы не меняем его работу.
     for(let i=0;i<7;i++){
       const out=constructionPhraseRaw();
       const fam=constructionFamily(out);
       if(!ctx.schemes.has('base:'+fam) || diversity<0.55){
-        ctx.schemes.add('base:'+fam);
+        ctx.schemes.add('base:'+fam); ctx.lastFam=fam;
         return out;
       }
     }
     const out=constructionPhraseRaw();
-    ctx.schemes.add('base:'+constructionFamily(out));
+    ctx.lastFam=constructionFamily(out);
+    ctx.schemes.add('base:'+ctx.lastFam);
     return out;
   }
 
@@ -2638,7 +2666,9 @@ const STATS_KEY='stats:v1';
 const STATS_FLUSH_MS=8000;
 const STATS_KEEP_DAYS=40;
 const STATS_MAX_TARGETS=300;
-let statsDelta=null, statsLastFlush=0, statsMemory=null;
+let statsDelta=null, statsLastFlush=0, statsMemory=null, statsLastWritten=null, trailingFlushScheduled=false;
+const flushMs=env=>{ const v=Number(env?.STATS_FLUSH_MS); return (env?.STATS_FLUSH_MS!=null && String(env.STATS_FLUSH_MS).trim()!=='' && Number.isFinite(v) && v>=0) ? v : STATS_FLUSH_MS; };
+const cloneJson=x=>JSON.parse(JSON.stringify(x));
 
 const newStatsBag=()=>({tot:{},users:{},days:{},targets:{}});
 const emptyStats=()=>({v:1,since:Date.now(),...newStatsBag()});
@@ -2664,6 +2694,7 @@ function recordMessage(env,from,chat,isStart){
     const ts=Date.now(); const id=String(from.id);
     const u=dUser(id,ts); u.m++;
     if(from.username) u.n=from.username;
+    if(chat?.type==='private') u.s=1;          // пишет боту → не заблокировал (на случай пропущенного my_chat_member)
     if(isStart){ u.st=1; u.s=1; bag().tot.starts=(bag().tot.starts||0)+1; }
     bag().tot.updates=(bag().tot.updates||0)+1;
     dDay(env,ts,id).m++;
@@ -2681,11 +2712,12 @@ function recordGeneration(env,userId,count,target,kind='phrases'){
   try{
     if(!userId || isAdmin(env,userId)) return;
     const ts=Date.now(); const id=String(userId);
-    const u=dUser(id,ts); u.g++;
+    const isUser=Number(userId)>0;             // отрицательный id — это чат, а не аккаунт
+    if(isUser){ const u=dUser(id,ts); u.g++; }
     const t=bag().tot; t.generations=(t.generations||0)+1;
     if(kind==='text'){ t.texts=(t.texts||0)+1; t.words=(t.words||0)+(Number(count)||0); }
     else t.phrases=(t.phrases||0)+(Number(count)||0);
-    const d=dDay(env,ts,id); d.g++; if(kind!=='text') d.p+=Number(count)||0;
+    const d=dDay(env,ts,isUser?id:null); d.g++; if(kind!=='text') d.p+=Number(count)||0;
     const name=String(target||'').trim().replace(/\s+/g,' ').slice(0,60);
     if(name){
       const key=name.toLowerCase();
@@ -2715,8 +2747,8 @@ function applyStats(base,d,env){
     const x=base.targets[k]||(base.targets[k]={n:0,d:dt.d});
     x.n+=dt.n||0; x.d=pickDisplay(x.d,dt.d);
   }
-  const keys=Object.keys(base.days).sort();
-  for(const k of keys.slice(0,Math.max(0,keys.length-STATS_KEEP_DAYS))) delete base.days[k];
+  const cutoff=dayKey(env,Date.now()-STATS_KEEP_DAYS*86400e3);
+  for(const k of Object.keys(base.days)) if(k<cutoff) delete base.days[k];
   const tk=Object.entries(base.targets);
   if(tk.length>STATS_MAX_TARGETS){
     tk.sort((a,b)=>b[1].n-a[1].n);
@@ -2728,22 +2760,44 @@ function applyStats(base,d,env){
 async function flushStats(env,force=false){
   if(!statsDelta) return;
   const now=Date.now();
-  if(!force && now-statsLastFlush<STATS_FLUSH_MS) return;
+  if(!force && now-statsLastFlush<flushMs(env)) return;
   const delta=statsDelta; statsDelta=null; statsLastFlush=now;
   if(!env.BOT_SETTINGS){ statsMemory=applyStats(statsMemory||emptyStats(),delta,env); return; }
   try{
-    const cur=(await env.BOT_SETTINGS.get(STATS_KEY,'json'))||emptyStats();
-    await env.BOT_SETTINGS.put(STATS_KEY,JSON.stringify(applyStats(cur,delta,env)));
+    let cur=(await env.BOT_SETTINGS.get(STATS_KEY,'json'))||null;
+    // KV может вернуть устаревшую копию (кэш/репликация). Если собственная последняя запись новее — берём её,
+    // иначе следующая запись затёрла бы прошлую пачку.
+    if(cur && statsLastWritten && (cur.rev||0)<(statsLastWritten.rev||0)) cur=statsLastWritten;
+    const next=applyStats(cur?cloneJson(cur):emptyStats(),delta,env);
+    next.rev=((cur&&cur.rev)||0)+1;
+    await env.BOT_SETTINGS.put(STATS_KEY,JSON.stringify(next));
+    statsLastWritten=next;
   }catch(e){
     console.error('stats flush failed; keeping delta in memory:',e?.message||e);
     statsDelta=applyStats(statsDelta||newStatsBag(),delta,env);
   }
 }
+// Если запись пропущена из-за троттлинга, а новых запросов нет — «хвост» не должен потеряться.
+function scheduleTrailingFlush(env,ctx){
+  if(!ctx || typeof ctx.waitUntil!=='function' || trailingFlushScheduled) return;
+  if(!statsDelta && !antiDelta.size) return;
+  trailingFlushScheduled=true;
+  ctx.waitUntil((async()=>{
+    try{
+      await new Promise(r=>setTimeout(r,flushMs(env)+50));
+      await flushStats(env,true); await flushAnti(env,true);
+    }catch(e){ console.error('trailing flush error:',e?.message||e); }
+    finally{ trailingFlushScheduled=false; }
+  })());
+}
 async function loadStats(env){
   await flushStats(env,true);
   if(!env.BOT_SETTINGS) return statsMemory||emptyStats();
-  try{ return (await env.BOT_SETTINGS.get(STATS_KEY,'json'))||emptyStats(); }
-  catch(e){ console.error('stats read failed:',e?.message||e); return statsMemory||emptyStats(); }
+  try{
+    const cur=(await env.BOT_SETTINGS.get(STATS_KEY,'json'))||null;
+    if(cur && statsLastWritten && (cur.rev||0)<(statsLastWritten.rev||0)) return statsLastWritten;
+    return cur||emptyStats();
+  }catch(e){ console.error('stats read failed:',e?.message||e); return statsLastWritten||statsMemory||emptyStats(); }
 }
 
 const fmtN=n=>Number(n||0).toLocaleString('ru-RU').replace(/\u00a0/g,' ');
@@ -2807,14 +2861,20 @@ async function handleAdminCommand(env,chatId,text){
   if(cmd==='resetstats'){
     if(arg.toLowerCase()!=='confirm') return send('Это удалит всю статистику без возможности восстановления.\nПодтверди командой: /resetstats confirm');
     statsDelta=null; statsMemory=null;
-    if(env.BOT_SETTINGS){ try{ await env.BOT_SETTINGS.delete(STATS_KEY); }catch(e){ return send('Не удалось сбросить: '+(e?.message||e)); } }
+    if(env.BOT_SETTINGS){
+      try{
+        let cur=null; try{ cur=await env.BOT_SETTINGS.get(STATS_KEY,'json'); }catch(_){}
+        const fresh=emptyStats(); fresh.rev=Math.max((cur&&cur.rev)||0,(statsLastWritten&&statsLastWritten.rev)||0)+1;
+        await env.BOT_SETTINGS.put(STATS_KEY,JSON.stringify(fresh)); statsLastWritten=fresh;
+      }catch(e){ return send('Не удалось сбросить: '+(e?.message||e)); }
+    }
     return send('Статистика обнулена.');
   }
 }
 
 // ===== Антитоп: кого обматерили больше всего — отдельно для каждого чата (группы и личные чаты не смешиваются) =====
 const ANTI_MAX=100, ANTI_FLUSH_MS=8000;
-let antiDelta=new Map(), antiLastFlush=0; const antiMemory=new Map();
+let antiDelta=new Map(), antiLastFlush=0; const antiMemory=new Map(), antiLastWritten=new Map();
 const antiKey=c=>`antitop:${c}`;
 // Какой вариант написания показывать: первый, но строчный заменяем вариантом с заглавной («вася» → «Вася»).
 const pickDisplay=(a,b)=>!a?b:(!b?a:((a===a.toLowerCase()&&b!==b.toLowerCase())?b:a));
@@ -2837,13 +2897,17 @@ function applyAnti(base,e){
 }
 async function flushAnti(env,force=false){
   if(!antiDelta.size) return;
-  const now=Date.now(); if(!force && now-antiLastFlush<ANTI_FLUSH_MS) return;
+  const now=Date.now(); if(!force && now-antiLastFlush<(Number.isFinite(Number(env?.STATS_FLUSH_MS))&&env?.STATS_FLUSH_MS!=null&&String(env.STATS_FLUSH_MS).trim()!==''?Number(env.STATS_FLUSH_MS):ANTI_FLUSH_MS)) return;
   const snap=antiDelta; antiDelta=new Map(); antiLastFlush=now;
   for(const [chat,e] of snap){
     if(!env.BOT_SETTINGS){ antiMemory.set(chat,applyAnti(antiMemory.get(chat)||antiEmpty(),e)); continue; }
     try{
-      const cur=(await env.BOT_SETTINGS.get(antiKey(chat),'json'))||antiEmpty();
-      await env.BOT_SETTINGS.put(antiKey(chat),JSON.stringify(applyAnti(cur,e)));
+      let cur=(await env.BOT_SETTINGS.get(antiKey(chat),'json'))||null;
+      const lw=antiLastWritten.get(chat);
+      if(cur && lw && (cur.rev||0)<(lw.rev||0)) cur=lw;
+      const next=applyAnti(cur?cloneJson(cur):antiEmpty(),e); next.rev=((cur&&cur.rev)||0)+1;
+      await env.BOT_SETTINGS.put(antiKey(chat),JSON.stringify(next));
+      antiLastWritten.set(chat,next);
     }catch(err){
       console.error('antitop flush failed; keeping in memory:',err?.message||err);
       antiDelta.set(chat,applyAnti(antiDelta.get(chat)||{g:0,t:{}},e));
@@ -2853,8 +2917,11 @@ async function flushAnti(env,force=false){
 async function loadAnti(env,chatId){
   await flushAnti(env,true);
   if(!env.BOT_SETTINGS) return antiMemory.get(String(chatId))||antiEmpty();
-  try{ return (await env.BOT_SETTINGS.get(antiKey(chatId),'json'))||antiEmpty(); }
-  catch(err){ console.error('antitop read failed:',err?.message||err); return antiMemory.get(String(chatId))||antiEmpty(); }
+  try{
+    const cur=(await env.BOT_SETTINGS.get(antiKey(chatId),'json'))||null, lw=antiLastWritten.get(String(chatId));
+    if(cur && lw && (cur.rev||0)<(lw.rev||0)) return lw;
+    return cur||antiEmpty();
+  }catch(err){ console.error('antitop read failed:',err?.message||err); return antiMemory.get(String(chatId))||antiEmpty(); }
 }
 function antiText(env,st,n,group){
   const arr=Object.values(st.t||{}).sort((a,b)=>b.n-a.n).slice(0,n);
@@ -3013,7 +3080,13 @@ async function handleUpdate(update,env){
       if(!(await canResetAnti(env,chatId,isGroup,m.from?.id))) return tg(env,'sendMessage',{chat_id:chatId,text:'Сбросить антитоп может только администратор группы.'});
       if((mr[1]||'').toLowerCase()!=='confirm') return tg(env,'sendMessage',{chat_id:chatId,text:'Антитоп этого чата будет удалён без возможности восстановления.\nПодтверди: /resetantitop confirm'});
       antiDelta.delete(String(chatId)); antiMemory.delete(String(chatId));
-      if(env.BOT_SETTINGS){ try{ await env.BOT_SETTINGS.delete(antiKey(chatId)); }catch(e){ return tg(env,'sendMessage',{chat_id:chatId,text:'Не удалось сбросить: '+(e?.message||e)}); } }
+      if(env.BOT_SETTINGS){
+        try{
+          let cur=null; try{ cur=await env.BOT_SETTINGS.get(antiKey(chatId),'json'); }catch(_){}
+          const lw=antiLastWritten.get(String(chatId)); const fresh=antiEmpty(); fresh.rev=Math.max((cur&&cur.rev)||0,(lw&&lw.rev)||0)+1;
+          await env.BOT_SETTINGS.put(antiKey(chatId),JSON.stringify(fresh)); antiLastWritten.set(String(chatId),fresh);
+        }catch(e){ return tg(env,'sendMessage',{chat_id:chatId,text:'Не удалось сбросить: '+(e?.message||e)}); }
+      }
       return tg(env,'sendMessage',{chat_id:chatId,text:'Антитоп обнулён.'});
     } }
   if(/^\/menu$/i.test(text)){ if(isGroup) return sendGroupMenu(env,chatId,m); return sendMenu(env,chatId,'',m.from?.id); }
@@ -3102,15 +3175,20 @@ export default {
     if(!env.BOT_TOKEN) return new Response('BOT_TOKEN is not configured',{status:500});
     const secret=env.WEBHOOK_SECRET;
     if(secret && request.headers.get('X-Telegram-Bot-Api-Secret-Token')!==secret) return new Response('Forbidden',{status:403});
+    let update;
+    try{ update=await request.json(); }
+    catch(e){ return new Response('Bad Request',{status:400}); }
     try{
-      const update=await request.json();
       await handleUpdate(update,env);
-      const fl=Promise.all([flushStats(env),flushAnti(env)]);
-      if(ctx&&typeof ctx.waitUntil==='function') ctx.waitUntil(fl); else await fl;
-      return new Response('OK');
     }catch(e){
+      // Ошибка обработки одного апдейта не должна заставлять Telegram повторять его бесконечно (на не-2xx он ретраит).
       console.error('Telegram webhook error:',e?.stack||e);
-      return new Response('Webhook error',{status:500});
     }
+    try{
+      const fl=Promise.all([flushStats(env),flushAnti(env)]);
+      scheduleTrailingFlush(env,ctx);
+      if(ctx&&typeof ctx.waitUntil==='function') ctx.waitUntil(fl); else await fl;
+    }catch(e){ console.error('flush error:',e?.stack||e); }
+    return new Response('OK');
   }
 };
