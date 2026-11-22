@@ -1,9 +1,9 @@
-// Generator core extracted from ГЕНЕРАТОР МАТА 0.943.
+// Generator core extracted from ГЕНЕРАТОР МАТА 0.944.
 // Telegram adapter supplies the small DOM-like settings interface used by the original engine.
 'use strict';
 
-const VERSION = '0.943';
-const BUILD_NOTE = 'разнообразие 0–100% (фокус пачки), аудит статистики, обработчик вебхука (v7)';
+const VERSION = '0.944';
+const BUILD_NOTE = 'единый генератор фраз, зависимые обороты, расширенные составные (v8)';
 
 const runtimeSettings = {
   diversity: 50,
@@ -73,7 +73,7 @@ function shuffle(a){
 //   100% — весь пул и жёсткое «не повторять», схемы идут по кругу.
 // Фокус задаётся хэшем слова и случайным зерном пачки (ctx.seed), поэтому он не требует хранения списков.
 function divFocusFrac(d){ return Math.min(1,Math.max(0.05,0.05+0.95*d*d)); }     // 0% → 5% пула, 50% → ~29%, 75% → ~58%, 100% → весь пул
-function divSchemeFrac(d){ return Math.min(1,Math.max(0.2,0.2+0.8*d*d)); }
+function divSchemeFrac(d){ return Math.min(1,Math.max(0.2,0.2+0.8*d)); }
 function divSeed(ctx){ if(ctx.seed==null) ctx.seed=(Math.random()*4294967296)>>>0; return ctx.seed; }
 function divHash(str,seed){
   let h=(2166136261^seed)>>>0;
@@ -81,12 +81,13 @@ function divHash(str,seed){
   h^=h>>>13; h=Math.imul(h,0x5bd1e995)>>>0; h^=h>>>15;
   return (h>>>0)/4294967296;
 }
-function divInFocus(x,frac,ctx){
+function divHashOf(x,ctx){
   const hc=ctx.hcache||(ctx.hcache=new Map());
   let h=hc.get(x);
   if(h===undefined){ h=divHash(String(Array.isArray(x)?x[0]:(x&&x.id!=null?x.id:x)),divSeed(ctx)); hc.set(x,h); }
-  return h<frac;
+  return h;
 }
+function divInFocus(x,frac,ctx){ return divHashOf(x,ctx)<frac; }
 // Вес слова, которое уже было в этой фразе (lw) / в этой пачке (bw): >1 — бонус повтору, <1 — штраф.
 function divWeights(d){
   const lw = d<.5 ? 1-(1-.55)*(d/.5) : .55-(.55-.035)*((d-.5)/.5);
@@ -139,66 +140,23 @@ function choose(arr, localUsed, batchUsed, diversityOverride, ctx){
   return cand[cand.length-1];
 }
 
-// 0.810: реестр схем должен быть доступен schemePick().
-// Раньше SCHEME_META был объявлен внутри makePhrase(), поэтому глобальная
-// schemePick() получала ReferenceError при любой адресной/хаос-схеме.
-const SCHEME_META = Object.freeze({
-  rare: new Set(['s12','s13','s14','m16','l15']),
-  role: new Set([
-    'c2','c5','c6','c8','c9','c10',
-    'ct2','ct4','ct6',
-    't3','t5','t6','t18','t19','t20','t22','t24','t25','t26',
-    't27','t28','t29','t30','t31','t32','t33','t34'
-  ]),
-  dash: new Set([
-    'c1','c2','c3','c4','c5','c6','c7','c8','c9','c10',
-    'ct1','ct2','ct3','ct4','ct5','ct6',
-    't14','t15','t16','t17','t18','t19','t20',
-    't21','t22','t23','t24','t25','t26','t28','t29','t31','t32','t33','t34'
-  ]),
-  targetClassic: new Set(['t1','t2','t3','t4','t5','t6','t7','t8','t9']),
-  targetTail: new Set(['t12','t13','t14','t15','t16','t17','t18','t19','t20','t21','t22','t23','t24','t25','t26','t27','t28','t29','t30','t31','t32','t33','t34'])
-});
-
+// Выбор рамки фразы (единый пул). Вес рамки (x.w) задаёт частоту; разнообразие работает как раньше:
+// на низком значении пачка держится узкого набора рамок, на высоком — чередует их без повторов.
 function schemePick(pool, key, ctx, diversity){
   if(!pool.length) return null;
-
-  // Взвешивание теперь определяется метаданными именно активного пула.
-  // Никаких ссылок на старые s*/m*/l*-ID для c*/ct*/t*-схем.
-  const rare=pool.filter(x=>SCHEME_META.rare.has(x.id));
-  const ordinary=pool.filter(x=>!SCHEME_META.rare.has(x.id));
   let active=pool;
-  if(rare.length && ordinary.length) active=chance(0.045)?rare:ordinary;
-  // 0.943: на низком разнообразии пачка берёт лишь часть схем (на 0% — около пятой части)
-  if(diversity<1 && active.length>=6){
-    const fr=divSchemeFrac(diversity), sub=active.filter(x=>divInFocus(x,fr,ctx));
-    if(sub.length>=2) active=sub;
+  if(diversity<1 && active.length>=4){
+    // «рабочий набор» рамок пачки: k самых «близких» по хэшу (зерно пачки), не меньше двух
+    const k=Math.max(2,Math.ceil(active.length*divSchemeFrac(diversity)));
+    if(k<active.length) active=[...active].sort((a,b)=>divHashOf(a,ctx)-divHashOf(b,ctx)).slice(0,k);
   }
-
-  function weight(x){
-    let w=1;
-    const isRole=SCHEME_META.role.has(x.id);
-    const isDash=SCHEME_META.dash.has(x.id);
-    if(isRole) w*=0.72;
-    else if(isDash) w*=0.55;
-
-    if(key==='target'){
-      if(SCHEME_META.targetClassic.has(x.id)) w*=1.16;
-      if(SCHEME_META.targetTail.has(x.id)) w*=0.96;
-    }
-    return w;
-  }
-
-  function weightedPick(list){
-    const weighted=list.map(x=>({x,w:weight(x)}));
-    const total=weighted.reduce((a,b)=>a+b.w,0);
+  const weightedPick=list=>{
+    const total=list.reduce((a,x)=>a+(x.w==null?1:x.w),0);
     let r=Math.random()*total;
-    for(const z of weighted){ r-=z.w; if(r<=0) return z.x; }
-    return weighted[weighted.length-1].x;
-  }
-
+    for(const x of list){ r-=(x.w==null?1:x.w); if(r<=0) return x; }
+    return list[list.length-1];
+  };
   if(diversity<=0) return weightedPick(active);
-
   const fresh=active.filter(x=>!ctx.schemes.has(x.id));
   if(!fresh.length) return weightedPick(active);
   if(diversity>=1) return weightedPick(fresh);
@@ -1060,20 +1018,20 @@ const CM_PFX_X=['о','за','про','по','на','раз','при','под','�
 const CM_SCHEME_P=0.16;   // доля сборок, идущих по схемам (остальное — прежние ветки без изменений)
 const CM_SCHEMES=[
   {n:'PFX+ROOT',            k:'adj',  w:1, d:0, stem:1, s:['PFX','ROOT']},
-  {n:'PFX+TADJ',            k:'adj',  w:6, d:0, s:['PFX','TADJ']},
-  {n:'PFX+TNOUN',           k:'noun', w:6, d:0, s:['PFX','TNOUN']},
-  {n:'PFX+ROOT+TADJ',       k:'adj',  w:8, d:1, s:['PFX','ROOT','TADJ']},
-  {n:'PFX+ROOT+ROOT+TADJ',  k:'adj',  w:3, d:1, s:['PFX','ROOT','ROOT','TADJ']},
-  {n:'PFX+PRE+ROOT+TADJ',   k:'adj',  w:4, d:0, s:['PFX','PRE','ROOT','TADJ']},
-  {n:'PRE+ROOT+TADJ',       k:'adj',  w:7, d:1, s:['PRE','ROOT','TADJ']},
-  {n:'PRE+TNOUN',           k:'noun', w:7, d:0, s:['PRE','TNOUN']},
-  {n:'PRE+MID+TNOUN',       k:'noun', w:5, d:0, s:['PRE','MID','TNOUN']},
+  {n:'PFX+TADJ',            k:'adj',  w:6, d:0, m:12, s:['PFX','TADJ']},
+  {n:'PFX+TNOUN',           k:'noun', w:6, d:0, m:12, s:['PFX','TNOUN']},
+  {n:'PFX+ROOT+TADJ',       k:'adj',  w:8, d:1, m:16, s:['PFX','ROOT','TADJ']},
+  {n:'PFX+ROOT+ROOT+TADJ',  k:'adj',  w:3, d:1, m:18, s:['PFX','ROOT','ROOT','TADJ']},
+  {n:'PFX+PRE+ROOT+TADJ',   k:'adj',  w:4, d:0, m:18, s:['PFX','PRE','ROOT','TADJ']},
+  {n:'PRE+ROOT+TADJ',       k:'adj',  w:7, d:1, m:16, s:['PRE','ROOT','TADJ']},
+  {n:'PRE+TNOUN',           k:'noun', w:7, d:0, m:13, s:['PRE','TNOUN']},
+  {n:'PRE+MID+TNOUN',       k:'noun', w:5, d:0, m:16, s:['PRE','MID','TNOUN']},
   {n:'ROOT+ROOT',           k:'adj',  w:1, d:1, stem:1, s:['ROOT','ROOT']},
-  {n:'ROOT+TADJ',           k:'adj',  w:8, d:1, s:['ROOT','TADJ']},
-  {n:'ROOT+TNOUN',          k:'noun', w:8, d:1, s:['ROOT','TNOUN']},
-  {n:'PRE+MID+ROOT+TADJ',   k:'adj',  w:5, d:0, s:['PRE','MID','ROOT','TADJ']},
-  {n:'PRE+MID+ROOT+TNOUN',  k:'noun', w:5, d:0, s:['PRE','MID','ROOT','TNOUN']},
-  {n:'ROOT+NUM+TADJ',       k:'adj',  w:4, d:1, s:['ROOT','NUM','TADJ']}
+  {n:'ROOT+TADJ',           k:'adj',  w:8, d:1, m:12, s:['ROOT','TADJ']},
+  {n:'ROOT+TNOUN',          k:'noun', w:8, d:1, m:12, s:['ROOT','TNOUN']},
+  {n:'PRE+MID+ROOT+TADJ',   k:'adj',  w:5, d:0, m:18, s:['PRE','MID','ROOT','TADJ']},
+  {n:'PRE+MID+ROOT+TNOUN',  k:'noun', w:5, d:0, m:19, s:['PRE','MID','ROOT','TNOUN']},
+  {n:'ROOT+NUM+TADJ',       k:'adj',  w:4, d:1, m:15, s:['ROOT','NUM','TADJ']}
 ];
 const CM_OPTS={allowStems:false};   // true — разрешить «основы» без окончания (изопиздо, хуехуе); по умолчанию это недоделанные слова и не выдаются
 const CM_SLOT={PFX:CM_PFX,PRE:CM_PRE,MID:CM_MID,NUM:CM_NUM,ROOT:CM_ROOT,TADJ:CM_TADJ,TNOUN:CM_TNOUN};
@@ -1089,6 +1047,33 @@ function cmSchemeWord(picks){
   for(const p of picks) w=cmJoin(w,Array.isArray(p)?p[0]:p);
   return w;
 }
+// Формы обычной сборки: короткие / средние / длинные, для прилагательных и существительных.
+// s — слоты, w — вес, m — максимум символов (отсекает неудачно длинные сочетания), p — без корня терминал обязан быть матерным.
+// Больше четырёх морфем не бывает: дальше слова перестают быть «адекватными».
+const CM_SHAPES=[
+  // короткие
+  {n:'ROOT+T',          w:16, m:10, s:['ROOT','T'], ts:1},
+  {n:'PRE+T',           w:7,  m:11, s:['PRE','T'],  p:1, ts:1},
+  {n:'PFX+T',           w:3,  m:11, s:['PFX','T'],  p:1, ts:1},
+  // средние
+  {n:'ROOT+ROOT+T',     w:14, m:14, s:['ROOT','ROOT','T']},
+  {n:'PRE+ROOT+T',      w:14, m:15, s:['PRE','ROOT','T']},
+  {n:'PFX+ROOT+T',      w:6,  m:14, s:['PFX','ROOT','T']},
+  {n:'ROOT+MID+T',      w:4,  m:14, s:['ROOT','MID','T']},
+  {n:'PRE+MID+T',       w:4,  m:15, s:['PRE','MID','T'], p:1},
+  // длинные
+  {n:'PRE+ROOT+ROOT+T', w:8,  m:18, s:['PRE','ROOT','ROOT','T']},
+  {n:'PFX+ROOT+ROOT+T', w:4,  m:17, s:['PFX','ROOT','ROOT','T']},
+  {n:'PRE+MID+ROOT+T',  w:5,  m:18, s:['PRE','MID','ROOT','T']},
+  {n:'PFX+PRE+ROOT+T',  w:3,  m:18, s:['PFX','PRE','ROOT','T']},
+  {n:'ROOT+ROOT+MID+T', w:3,  m:17, s:['ROOT','ROOT','MID','T']}
+];
+// Числительные/«количественные» морфемы: в одном слове больше одной не бывает («десятитрёхпердливый» — не слово).
+const CM_NUMISH=new Set([...CM_NUM,...CM_NUM_PRE,'много','полу','полно','трое']);
+const CM_MID_PLAIN=CM_MID.filter(x=>!CM_NUMISH.has(x));
+const cmNumishCount=picks=>picks.filter(x=>typeof x==='string'&&CM_NUMISH.has(x)).length;
+// Короткие терминалы — для коротких форм (жопоухий, хуесос), иначе короткие слова не получаются.
+const CM_TSHORT={adj:CM_TADJ.filter(t=>t[0].length<=6),noun:CM_TNOUN.filter(t=>t[0].length<=5)};
 function cmOk(w,maxLen,dup,dict){
   if(w.length<6||w.length>maxLen) return false;
   if(!/^[а-яё]+$/u.test(w)) return false;
@@ -1115,15 +1100,16 @@ function buildCompound(kind,ctx,div){
       const keys=picks.filter(Array.isArray).map(x=>x[1]);
       const strs=picks.filter(x=>!Array.isArray(x));
       if(!dup && (new Set(keys).size!==keys.length || new Set(strs).size!==strs.length)) continue;
+      if(cmNumishCount(picks)>1) continue;
       if(!sch.s.includes('ROOT') && !picks.filter(Array.isArray).some(x=>CM_PROF.has(x[1]))) continue;   // без корня терминал должен быть матерным
       const w=cmSchemeWord(picks);
       if(!sch.s.includes('ROOT') && typeof picks[0]==='string' && picks[0].length<=2 && w.length<8) continue;   // «осучий», «ососый»: короткая приставка без корня даёт куцее слово (а «изохуй», «подхуй» — норма)
-      if(cmOk(w,maxLen,dup,dict)) return w;
+      if(cmOk(w,Math.min(maxLen,sch.m||maxLen),dup,dict)) return w;
       continue;
     }
     q=(q-CM_SCHEME_P)/(1-CM_SCHEME_P);
     // --- 1. «рецепты» нестандартных, но узнаваемых композитов (собираются случайно, не из словаря) ---
-    if(q<.30){
+    if(q<.14){
       const term=pk(TERMS), prof=CM_PROF.has(term[1]); const k=Math.random();
       let w='', dup=false;
       if(k<.30){            // корень + множитель + терминал:   хуе+дву+пиздый, мудо+трёх+жопый
@@ -1144,43 +1130,26 @@ function buildCompound(kind,ctx,div){
       continue;
     }
     // --- 2. короткие композиты: корень + терминал (хуемуд, пиздодуй, жопоног) ---
-    if(q<.52){
+    if(q<.30){
       const term=pk(TERMS), ro=pk(CM_ROOT);
       if(ro[1]===term[1]) continue;
       const w=cmJoin(ro[0],term[0]);
       if(cmOk(w,12,false,dict)) return w;
       continue;
     }
-    // --- 3. обычная сборка: [приставка?] [усилители 0–2] [корни 1–3] [множитель?] терминал ---
-    const term=pk(TERMS);
-    const r=Math.random();
-    const useMid=Math.random()<.12;
-    let nPre=r<.54?0:(r<.93?1:2);
-    if(kind==='noun'&&nPre>1) nPre=1;
-    const pfx=(nPre===0&&Math.random()<.17)?pk(CM_PFX):'';
-    const rr=Math.random();
-    let nRoot=rr<.70?1:(rr<.98?2:3);
-    if(nPre+nRoot+(useMid?1:0)>4) nRoot=Math.max(1,4-nPre-(useMid?1:0));
-    if(nPre>=1 && CM_PROF.has(term[1]) && Math.random()<.26) nRoot=0;
-    const allowDup=Math.random()<.04;
-    const keys=new Set([term[1]]);
-    const pre=[]; for(let i=0;i<nPre;i++) pre.push(pk(CM_PRE));
-    if(new Set(pre).size!==pre.length && !(Math.random()<.04)) continue;   // «свиносвиноёбанный» бывает, но редко
-    const roots=[]; let ok=true;
-    for(let i=0;i<nRoot;i++){
-      const ro=pk(CM_ROOT);
-      if(!allowDup&&keys.has(ro[1])){ok=false;break;}
-      keys.add(ro[1]); roots.push(ro[0]);
+    // --- 3. обычная сборка по таблице форм CM_SHAPES (короткие / средние / длинные; T — TADJ или TNOUN по виду слова) ---
+    {
+      let r=Math.random()*CM_SHAPES.reduce((a,x)=>a+x.w,0), sh=CM_SHAPES[CM_SHAPES.length-1];
+      for(const x of CM_SHAPES){ r-=x.w; if(r<=0){ sh=x; break; } }
+      const allowDup=Math.random()<.04;                                    // «свиносвиноёбанный» бывает, но редко
+      const picks=sh.s.map(sl=>pk(sl==='T'?(sh.ts?CM_TSHORT[kind]:TERMS):(sl==='MID'?CM_MID_PLAIN:CM_SLOT[sl])));
+      if(cmNumishCount(picks)>1) continue;
+      const keys=picks.filter(Array.isArray).map(x=>x[1]), strs=picks.filter(x=>!Array.isArray(x));
+      if(!allowDup && (new Set(keys).size!==keys.length || new Set(strs).size!==strs.length)) continue;
+      if(sh.p && !picks.filter(Array.isArray).some(x=>CM_PROF.has(x[1]))) continue;
+      const w=cmSchemeWord(picks);
+      if(cmOk(w,Math.min(maxLen,sh.m),allowDup,dict)) return w;
     }
-    if(!ok) continue;
-    const mid=useMid?pk(CM_MID):'';
-    if(mid && (pre.includes(mid))) continue;
-    let w=pfx;
-    for(const p of pre) w=cmJoin(w,p);
-    for(const x of roots) w=cmJoin(w,x);
-    if(mid) w=cmJoin(w,mid);
-    w=cmJoin(w,term[0]);
-    if(cmOk(w,maxLen,allowDup,dict)) return w;
   }
   // запасной вариант тоже генерируется (не из списка)
   return cmJoin(pk(CM_ROOT)[0],pk(TERMS)[0]);
@@ -1203,6 +1172,11 @@ function generatedCompoundWord(kind,ctx){
 const CM_PROF=new Set(['пизд','хуй','муд','жоп','хер','еб','срак','бляд','сос','манд','суч','дроч','трах','перд','залуп','член','дрист','говн','гонд','сса','бзд','кал']);
 const CM_LEX={SCHEMES:CM_SCHEMES,SLOT:CM_SLOT,NUM:CM_NUM,NUM_PRE:CM_NUM_PRE,PFX_X:CM_PFX_X,PROF:CM_PROF,PFX:CM_PFX,PRE:CM_PRE,MID:CM_MID,ROOT:CM_ROOT,TADJ:CM_TADJ,TNOUN:CM_TNOUN};
 
+// Слова-управляющие для «зависимых» конструкций единого генератора (берутся только те, что есть в словаре DB).
+const UPG_TITLES_M=new Set(['алигарх','султан','тиран','пастух','пират','бандит','монах']);       // «алигарх жоп»
+// Причастия, требующие творительного: «петухом бывавший», «пидором слывший», «мудаком работавший».
+const UPG_CACHE={obj:null,objKey:'',titles:null,titleKey:''};
+const UPG_PART_INSTR=['бывавший','слывший','прослывший','работавший','служивший','числившийся','считавшийся','притворявшийся','прикидывавшийся','оказывавшийся','выступавший'];
 function makePhraseCore(gender, batchCtx, allowTarget=true){
   const ctx = batchCtx || {words:new Set(),schemes:new Set(),advs:new Set(),freq:new Map(),roleRecent:[],compoundFreq:new Map()};
   const used = new Set();
@@ -1352,10 +1326,26 @@ function makePhraseCore(gender, batchCtx, allowTarget=true){
   // Для него оставлены только формы, которые уже подтверждены словарём /
   // архивными примерами. Это сознательно консервативнее: лучше дать
   // родительный ед. числа, чем получить уродливое «кровопицов» из автоматики.
+  // Родительный множественного: сначала таблица исключений, затем регулярные правила
+  // (хуесос → хуесосов, мудак → мудаков, ворон → воронов, шлюха → шлюх, блядь → блядей).
+  function genPluralRegular(w, g){
+    if(g==='female'){
+      if(/ь$/u.test(w)) return w.slice(0,-1)+'ей';                                       // блядь → блядей
+      if(/[бвгдзклмнпрстфхжчшщ]а$/u.test(w) && /[аеёиоуыэюя][бвгдзклмнпрстфхжчшщ]а$/u.test(w)) return w.slice(0,-1);   // шлюха → шлюх, пизда → пизд, сука → сук
+      return '';
+    }
+    if(/(ок|ёк)$/u.test(w)) return w.replace(/[оё]к$/u,'ков');                       // мудок → мудков
+    if(/ец$/u.test(w)) return w.replace(/ец$/u,'цев');                               // японец → японцев
+    if(/[жчшщ]$/u.test(w)) return w+'ей';                                            // грыж → грыжей
+    if(/ь$/u.test(w)) return w.slice(0,-1)+'ей';                                     // пастырь → пастырей
+    if(/й$/u.test(w)) return w.slice(0,-1)+'ев';                                     // воробей → воробьев (грубо)
+    if(/[бвгдзклмнпрстфх]$/u.test(w)) return w+'ов';                                 // хуесос → хуесосов
+    return '';
+  }
   function genitivePluralNoun(word, nounGender){
     const w=String(word||'');
     if(!w) return w;
-    return GEN_PL_EXCEPT[w] || '';
+    return GEN_PL_EXCEPT[w] || genPluralRegular(w,nounGender);
   }
 
   function nounInfo(forceGender){
@@ -1378,7 +1368,7 @@ function makePhraseCore(gender, batchCtx, allowTarget=true){
   // («эякулирующий», «кудахтающий», «обдрочившийся», «отраханный», «заёбанный»).
   const PARTS=['курящий','кудахтающий','изнывающий','эякулирующий','обдрочившийся','ожиревший','отраханный','дрочканутый','заёбанный','недоссанный','попользованный','обкончанный','дрочащий','ссущий','срущий','пердящий','хрюкающий','воняющий','потеющий','слюнявящий','сопящий','чавкающий','обосравшийся','обделавшийся','опухший','облезший','засранный','обдолбанный','обтраханный','выебанный','отсосавший','зассанный','обкаканный','обоссанный','изуродованный','ёбнутый','кривляющийся','визжащий','гнусавящий','трясущийся'];
   const CM_PART_P=0.24;
-  const CM_ADJ_P=0.58, CM_NOUN_P=0.16;
+  const CM_ADJ_P=0.66, CM_NOUN_P=0.26;
   const adjective=(g)=>{
     if(chance(CM_ADJ_P)){
       const raw=generatedCompoundWord('adj',ctx);
@@ -1484,9 +1474,12 @@ function makePhraseCore(gender, batchCtx, allowTarget=true){
     // «глотатель ануса», «пожиратель енотов». Поэтому объект выбирается из
     // объединённого существительного словаря, а его род сохраняется отдельно
     // для правильного склонения.
-    const pools=[...new Set(DB.male.concat(DB.female))];
-    const roleWords=new Set([...ROLE_MALE,...ROLE_FEMALE]);
-    const candidates=pools.filter(w=>!roleWords.has(w));
+    const ck=DB.male.length+':'+DB.female.length;                       // кэш пула объектов (словарь в работе не меняется)
+    if(!UPG_CACHE.obj||UPG_CACHE.objKey!==ck){
+      const roleWords=new Set([...ROLE_MALE,...ROLE_FEMALE]);
+      UPG_CACHE.obj=[...new Set(DB.male.concat(DB.female))].filter(w=>!roleWords.has(w)); UPG_CACHE.objKey=ck;
+    }
+    const candidates=UPG_CACHE.obj;
     const chosen=word(candidates,'roleObject');
     const gender=DB.female.includes(chosen)?'female':'male';
     return {word:chosen,gender,target:false};
@@ -1494,6 +1487,8 @@ function makePhraseCore(gender, batchCtx, allowTarget=true){
   const objectInfo=(g)=>chooseCaseInfo(roleObjectNounInfo(g),'roleObject');
   function adjectiveGenitive(base, nounGender, plural){
     let w=String(base||''); if(!w) return w;
+    // притяжательные на -ий («рыбий», «собачий», «сучий»): рыбьего / рыбьей / рыбьих, а не «рыбего»
+    if(/(волч|коз|овеч|рыб|собач|суч|щуч|лосяч|козляч|козяч|мандяч|свиняч|хуяч|поросяч)ий$/u.test(w)) return w.replace(/ий$/u, plural?'ьих':(nounGender==='female'?'ьей':'ьего'));
     if(plural){
       const r=[[/вшийся$/u,'вшихся'],[/ившийся$/u,'ившихся'],[/ывшийся$/u,'ывшихся'],[/авшийся$/u,'авшихся'],[/евшийся$/u,'евшихся'],[/явшийся$/u,'явшихся'],[/ующийся$/u,'ующихся'],[/ающийся$/u,'ающихся'],[/яющийся$/u,'яющихся'],[/ущийся$/u,'ущихся'],[/ящийся$/u,'ящихся'],[/ющийся$/u,'ющихся'],[/вший$/u,'вших'],[/ивший$/u,'ивших'],[/ывший$/u,'ывших'],[/авший$/u,'авших'],[/евший$/u,'евших'],[/явший$/u,'явших'],[/ующий$/u,'ующих'],[/ающий$/u,'ающих'],[/яющий$/u,'яющих'],[/ущий$/u,'ущих'],[/ящий$/u,'ящих'],[/ющий$/u,'ющих'],[/ий$/u,'их'],[/ый$/u,'ых'],[/ой$/u,'ых']];
       for(const [rx,repl] of r) if(rx.test(w)) return w.replace(rx,repl); return w;
@@ -1504,15 +1499,6 @@ function makePhraseCore(gender, batchCtx, allowTarget=true){
     }
     const r=[[/вшийся$/u,'вшегося'],[/ившийся$/u,'ившегося'],[/ывшийся$/u,'ывшегося'],[/авшийся$/u,'авшегося'],[/евшийся$/u,'евшегося'],[/явшийся$/u,'явшегося'],[/ующийся$/u,'ующегося'],[/ающийся$/u,'ающегося'],[/яющийся$/u,'яющегося'],[/ущийся$/u,'ущегося'],[/ящийся$/u,'ящегося'],[/ющийся$/u,'ющегося'],[/вший$/u,'вшего'],[/ивший$/u,'ившего'],[/ывший$/u,'ывшего'],[/авший$/u,'авшего'],[/евший$/u,'евшего'],[/явший$/u,'явшего'],[/ующий$/u,'ующего'],[/ающий$/u,'ающего'],[/яющий$/u,'яющего'],[/ущий$/u,'ущего'],[/ящий$/u,'ящего'],[/ющий$/u,'ющего'],[/кий$/u,'кого'],[/гий$/u,'гого'],[/хий$/u,'хого'],[/ий$/u,'его'],[/ый$/u,'ого'],[/ой$/u,'ого']];
     for(const [rx,repl] of r) if(rx.test(w)) return w.replace(rx,repl); return w;
-  }
-  function dependentGroup(g){
-    return chooseCaseInfo(nounInfo(g),'free');
-  }
-  function dependentGroupWithAdj(g){
-    const x=dependentGroup(g);
-    // Свободная именная группа всегда остаётся в именительном.
-    // Склонение здесь намеренно не запускается.
-    return adjective(x.gender)+' '+x.word;
   }
   // Родительный теперь разрешён только для ролей, у которых он действительно
   // выглядит как зависимый объект/адресат. Сам факт попадания слова в ROLE_*
@@ -1556,7 +1542,6 @@ function makePhraseCore(gender, batchCtx, allowTarget=true){
     // Переходная роль должна быть завершена объектом.
     return rolePhraseForWord(role.word,g);
   };
-  const roleWithAdj=(g)=>A2(g)+' '+rolePhrase(g);
 
   // Редкий «старошкольный» свободный блок: несколько именных групп,
   // затем инструментальный оборот и постпоставленное причастие.
@@ -1585,6 +1570,7 @@ function makePhraseCore(gender, batchCtx, allowTarget=true){
       if(/ья$/u.test(w)) return w.replace(/ья$/u,'ьёй');
       if(/ь$/u.test(w)) return w.replace(/ь$/u,'ью');
       if(/я$/u.test(w)) return w.replace(/я$/u,'ей');
+      if(/[жчшщц]а$/u.test(w)) return w.replace(/а$/u,'ей');                          // каторжницей, кражей
       if(/а$/u.test(w)) return w.replace(/а$/u,'ой');
       return w;
     }
@@ -1615,548 +1601,122 @@ function makePhraseCore(gender, batchCtx, allowTarget=true){
     ctx.lastLen=length;
   }
 
-  // В архивных скриншотах начальное «—» / «, ты» это визуальный остаток
-  // пустого поля обращения. В генераторной схеме тире имеет смысл только
-  // В оригинале длинное «—» служит либо разделителем двух самостоятельных
-  // групп, либо заменой пустого поля обращения. Короткие тире не используем.
-  // ---------------- Scheme registry ----------------
-  // Единый реестр метаданных используется только для реально активных
-  // специализированных пулов: chaos/target/chaosTarget. Старый огромный
-  // массив «schemes» был отдельной, больше не вызываемой системой и удалён.
-  // Теперь schemePick получает характеристики конкретного пула по ID.
-  // Специальные схемы режима «Хаос». В отличие от «Разное», здесь две
-  // независимые именные группы получают род отдельно. Внутри каждой группы
-  // согласование остаётся цельным, но левая и правая части намеренно могут
-  // быть мужскими/женскими независимо друг от друга.
-  const chaosSchemes=[
-    {id:'c1',len:'short',f:()=>{const a=nounInfo(),b=nounInfo();return `${A(a.gender)} ${a.word} — ${A(b.gender)} ${b.word}!`; }},
-    {id:'c2',len:'short',f:()=>{const a=nounInfo(),b=nounInfo();return `${A(a.gender)} ${a.word} — ${A(b.gender)} ${rolePhrase(b.gender)}!`; }},
-    {id:'c3',len:'short',f:()=>{const a=nounInfo(),b=nounInfo();return `${emptyAddressPrefix()}${A(a.gender)} ${a.word} — ${A(b.gender)} ${b.word}!`; }},
-    {id:'c4',len:'medium',f:()=>{const a=nounInfo(),b=nounInfo();return `${A(a.gender)} ${A2(a.gender)} ${a.word} — ${A2(b.gender)} ${b.word}!`; }},
-    {id:'c5',len:'medium',f:()=>{const a=nounInfo(),b=nounInfo();return `${A(a.gender)} ${a.word} — ${A2(b.gender)} ${rolePhrase(b.gender)}!`; }},
-    {id:'c6',len:'medium',f:()=>{const a=nounInfo(),b=nounInfo();return `${emptyAddressPrefix()}${A(a.gender)} ${rolePhrase(a.gender)} — ${A(b.gender)} ${b.word}!`; }},
-    {id:'c7',len:'long',f:()=>{const a=nounInfo(),b=nounInfo();return `${A(a.gender)}, ${A2(a.gender)} ${a.word} — ${A2(b.gender)}, ${A2(b.gender)} и ${A2(b.gender)} ${b.word}!`; }},
-    {id:'c8',len:'long',f:()=>{const a=nounInfo(),b=nounInfo();return `${A(a.gender)} ${a.word} — ${adv()} ${A2(b.gender)} ${rolePhrase(b.gender)}!`; }},
-    {id:'c9',len:'long',f:()=>{const a=nounInfo(),b=nounInfo();return `${emptyAddressPrefix()}${adv()} ${A(a.gender)} ${a.word} — ${A2(b.gender)}, ${A2(b.gender)} и ${rolePhrase(b.gender)}!`; }},
-    {id:'c10',len:'long',f:()=>{const a=nounInfo(),b=nounInfo();return `${A(a.gender)} ${rolePhrase(a.gender)} — ${A2(b.gender)} ${b.word}, ${A2(b.gender)} и ${A2(b.gender)} ${nounInfo(b.gender).word}!`; }}
+  // ===== Единый генератор фраз (0.944) =====
+  // Раньше фразу собирали шесть разных генераторов с тремя пулами схем (старая школа, «скриншотный» слой,
+  // экспериментальный, конструкционная грамматика, схемы цели и хаоса). Теперь один движок:
+  //   1) выбирается РАМКА фразы (с целью / без цели; вес зависит от длины) — единый пул, разнообразие работает по нему;
+  //   2) рамка собирается из ИМЕННЫХ ГРУПП: [0–3 определения с наречиями] + ГОЛОВА;
+  //   3) голова: обычное/составное существительное | управляющее слово с зависимым («сосатель хуесосов»)
+  //      | титул с зависимым и причастным оборотом («алигарх жоп, петухом бывавший») | существительное + причастие.
+  // Режимы «Мужской/Женский/Смешанный/Хаос» — параметр рода групп: в «Хаосе» род каждой группы выбирается заново.
+  const wp=list=>{ let t=0; for(const e of list) t+=e[1]; let r=Math.random()*t; for(const e of list){ r-=e[1]; if(r<=0) return e[0]; } return list[list.length-1][0]; };
+  const HEAD_W={
+    short:[['noun',.80],['role',.15],['title',.05]],
+    medium:[['noun',.56],['role',.22],['title',.12],['post',.10]],
+    long:[['noun',.44],['role',.24],['title',.20],['post',.12]]
+  };
+  const ADJ_W={ short:[[0,.30],[1,.70]], medium:[[1,.38],[2,.44],[3,.18]], long:[[2,.38],[3,.62]] };
+  const CLAUSE_P={short:0,medium:.32,long:.52};
+  // Определения: «A», «A, A», «A A», «A, A и A»; наречия — по правилам оригинала (в A/A2 и в cmAdvInject).
+  function adjChain(g,n){
+    if(n<=0) return '';
+    if(n===1) return A(g,true);
+    if(n===2) return chance(.72) ? `${A(g,true)}, ${A2(g)}` : `${A(g,true)} ${A2(g)}`;
+    return `${A(g,true)}, ${A2(g)} и ${A2(g)}`;
+  }
+  // Титул + зависимое в родительном («алигарх жоп»); только слова, реально имеющиеся в словаре.
+  function titleHead(g,withClause){
+    const tk=DB.male.length+':t';
+    if(UPG_CACHE.titleKey!==tk){ UPG_CACHE.titles=DB.male.filter(w=>UPG_TITLES_M.has(w)); UPG_CACHE.titleKey=tk; }
+    const pool=g==='female'?[]:UPG_CACHE.titles;
+    if(!pool.length) return roleHead(g,withClause);
+    const t=word(pool,'title');
+    const obj=objectInfo(g);
+    const adj=chance(.30) ? adjectiveGenitive(word(DB.adj,'roleObjectAdj'),obj.gender,obj.plural)+' ' : '';
+    return `${t} ${adj}${obj.word}${withClause?instrClause(g):''}`;
+  }
+  function roleHead(g,withClause){
+    const r=rolePhrase(g);
+    return r+(withClause&&r.includes(' ')?instrClause(g):'');
+  }
+  // Причастный оборот: «, петухом бывавший» — творительный + причастие, согласованное с головой.
+  function instrClause(g){
+    for(let i=0;i<6;i++){
+      const x=freeNounInfo();
+      const inst=instrumentalNoun(x.word,x.gender);
+      if(inst===x.word || !/(ом|ем|ой|ей|ью|ией|ёй)$/u.test(inst)) continue;   // неизменяемые/сомнительные слова не берём
+      const base=choose(UPG_PART_INSTR,used,ctx.words,diversity,ctx); used.add(base); ctx.words.add(base);
+      return `, ${inst} ${adjectiveForGender(base,g)}`;
+    }
+    return '';
+  }
+  function headText(g,L,noClause){
+    const kind=wp(HEAD_W[L]);
+    const cl=!noClause && chance(CLAUSE_P[L]);
+    if(kind==='role') return roleHead(g,cl);
+    if(kind==='title') return titleHead(g,cl);
+    if(kind==='post') return `${nounInfo(g).word}, ${participle(g)}`;
+    return nounInfo(g).word;
+  }
+  // Именная группа. Определения относятся к первому слову головы.
+  function np(g,L,opt={}){
+    const kind=opt.head;
+    let head;
+    if(kind==='noun') head=nounInfo(g).word;
+    else head=headText(g,L,opt.noClause);
+    let na=wp(ADJ_W[L]);
+    if(head.includes(' ') && na>0 && (L==='short'||chance(.35))) na-=1;      // составная голова: определений меньше
+    const chain=adjChain(g,na);
+    return chain ? `${chain} ${head}` : head;
+  }
+  const G=()=>groupGender();
+  const tinyNoun=g=>nounInfo(g).word;
+  // Пул рамок. t: false — без цели, true — с целью. w — вес по длине. Имя цели всегда в начале или перед «—».
+  const FRAMES=[
+    // — без цели —
+    {id:'np',    t:false, w:{short:.28,medium:.18,long:.10}, f:L=>np(G(),L)},                                   // «NP»
+    {id:'dash',  t:false, w:{short:.24,medium:.36,long:.42}, f:L=>{const a=G(),b=G();return `${np(a,L)} — ${np(b,L)}`;}},   // «NP — NP»
+    {id:'nDash', t:false, w:{short:.08,medium:.10,long:.12}, f:L=>{const a=G(),b=G();return `${tinyNoun(a)} — ${np(b,L)}`;}},// «Сраконог — NP»
+    {id:'tyNP',  t:false, w:{short:.10,medium:.22,long:.26}, f:L=>`ты ${np(G(),L)}`},                          // «ты NP»
+    {id:'ty',    t:false, w:{short:.12,medium:.04,long:0},   f:L=>`ты ${tinyNoun(G())}`},                        // «ты херомуд»
+    {id:'nA',    t:false, w:{short:.08,medium:.02,long:0},   f:L=>{const g=G();return `${tinyNoun(g)} ${adjectiveForGender(word(DB.adj,'adj'),g)}`;}},   // «свинохер тугой»
+    // — с целью (имя всегда в начале или перед «—») —
+    {id:'tTy',   t:true,  w:{short:.34,medium:.28,long:.22}, f:L=>`${target}, ты ${np(G(),L)}`},               // «Имя, ты NP»
+    {id:'tDash', t:true,  w:{short:.24,medium:.20,long:.16}, f:L=>`${target} — ${np(G(),L)}`},                  // «Имя — NP»
+    {id:'tEpi',  t:true,  w:{short:.16,medium:.28,long:.26}, f:L=>{const a=G(),b=G();return `${np(a,L,{noClause:true})} ${target} — ${np(b,L)}`;}},   // «NP Имя — NP»
+    {id:'tEpiN', t:true,  w:{short:.10,medium:.10,long:.06}, f:L=>{const a=G(),b=G();return `${tinyNoun(a)} ${target} — ${np(b,L)}`;}},   // «Агрегат Имя — NP»
+    {id:'tTiny', t:true,  w:{short:.16,medium:.04,long:0},   f:L=>{const g=G();const r=Math.random();return r<.45?`${target}, ты ${tinyNoun(g)}`:(r<.80?`${target} — ${tinyNoun(g)}`:`${target} — ${tinyNoun(g)} ${adjectiveForGender(word(DB.adj,'adj'),g)}`);}}
   ];
-  const ti=targetInfo();
-  const addressedTarget = target ? target : '';
-  // В оригинале при пустом поле «Кого обругать?» интерфейс мог показывать
-  // длинное «—» перед самостоятельной группой. Это не падеж и не часть
-  // словосочетания: это именно пустое обращение. Используем его редко и только
-  // в адресных схемах без заданной цели.
-  const emptyAddressPrefix=()=> '— ';
-  // Цель больше не привязана к началу строки. В оригинальном генераторе
-  // имя могло быть первым словом, хвостом первой группы перед «—» или
-  // частью второй группы. Поэтому здесь несколько независимых позиций:
-  // начало / после определения / конец первой группы / начало второй группы /
-  // конец второй группы. Важно: «, ты» оставляем только для настоящего
-  // обращения; в остальных схемах имя ведёт себя как обычный якорь группы.
-
-  const chaosTargetSchemes = target ? [
-    {id:'ct1',len:'short',f:()=>{const a=nounInfo(),b=nounInfo();return `${addressedTarget}, ты ${A(a.gender)} ${a.word} — ${A(b.gender)} ${b.word}!`; }},
-    {id:'ct2',len:'medium',f:()=>{const a=nounInfo(),b=nounInfo();return `${A(a.gender)} ${addressedTarget} — ${A2(b.gender)} ${rolePhrase(b.gender)}!`; }},
-    {id:'ct3',len:'medium',f:()=>{const a=nounInfo(),b=nounInfo();return `${addressedTarget} — ${A(a.gender)} ${a.word}, ${A2(b.gender)} ${b.word}!`; }},
-    {id:'ct4',len:'long',f:()=>{const a=nounInfo(),b=nounInfo();return `${A(a.gender)} ${a.word} ${addressedTarget} — ${adv()} ${A2(b.gender)} ${rolePhrase(b.gender)}!`; }},
-    {id:'ct5',len:'long',f:()=>{const a=nounInfo(),b=nounInfo();return `${addressedTarget}, ты ${A(a.gender)}, ${A2(a.gender)} ${a.word} — ${A2(b.gender)} ${b.word}!`; }},
-    {id:'ct6',len:'long',f:()=>{const a=nounInfo(),b=nounInfo();return `${A(a.gender)} ${rolePhrase(a.gender)} — ${addressedTarget}, ${A2(b.gender)} ${b.word}!`; }}
-  ] : [];
-
-  const targetSchemes = target ? [
-    // Классическое обращение — сохраняем как наиболее частый вариант.
-    {id:'t1',len:'short',f:()=>`${addressedTarget}, ты ${A(ti.gender)} ${A2(ti.gender)} ${nounInfo(ti.gender).word}!`},
-    {id:'t2',len:'short',f:()=>`${addressedTarget}, ты ${A(ti.gender)} ${nounInfo(ti.gender).word}!`},
-    {id:'t3',len:'short',f:()=>`${addressedTarget}, ты ${rolePhrase(ti.gender)}!`},
-
-    // Имя после определения: «шутовской Серёжа — ...».
-    {id:'t12',len:'short',f:()=>`${A(ti.gender)} ${addressedTarget}!`},
-    {id:'t13',len:'short',f:()=>`${A(ti.gender)} ${A2(ti.gender)} ${addressedTarget}!`},
-    {id:'t14',len:'short',f:()=>`${A(ti.gender)} ${addressedTarget} — ${A(ti.gender)} ${nounInfo(ti.gender).word}!`},
-    {id:'t15',len:'short',f:()=>`${addressedTarget} — ${A(ti.gender)} ${nounInfo(ti.gender).word}!`},
-    {id:'t16',len:'short',f:()=>`${A(ti.gender)} ${nounInfo(ti.gender).word} — ${addressedTarget}!`},
-
-    {id:'t4',len:'medium',f:()=>`${addressedTarget}, ты ${A(ti.gender)}, ${A2(ti.gender)} и ${A2(ti.gender)} ${nounInfo(ti.gender).word}!`},
-    {id:'t5',len:'medium',f:()=>`${addressedTarget}, ты ${A(ti.gender)} ${A2(ti.gender)} ${nounInfo(ti.gender).word}, ${rolePhrase(ti.gender)}!`},
-    {id:'t6',len:'medium',f:()=>`${addressedTarget}, ты ${A(ti.gender)} ${A2(ti.gender)} ${rolePhrase(ti.gender)}!`},
-
-    // Цель в конце первой группы — один из характерных для оригинала
-    // вариантов: «[описание] имя — [вторая группа]».
-    {id:'t17',len:'medium',f:()=>`${A(ti.gender)} ${A2(ti.gender)} ${addressedTarget} — ${A2(ti.gender)} ${nounInfo(ti.gender).word}!`},
-    {id:'t18',len:'medium',f:()=>`${A(ti.gender)} ${rolePhrase(ti.gender)} ${addressedTarget} — ${A(ti.gender)} ${nounInfo(ti.gender).word}!`},
-    {id:'t19',len:'medium',f:()=>`${A(ti.gender)} ${nounInfo(ti.gender).word} ${addressedTarget} — ${A2(ti.gender)} ${rolePhrase(ti.gender)}!`},
-    {id:'t20',len:'medium',f:()=>`${A(ti.gender)} ${addressedTarget} — ${A2(ti.gender)} ${rolePhrase(ti.gender)}!`},
-
-    {id:'t7',len:'long',f:()=>`${addressedTarget}, ты ${adv()} ${A2(ti.gender)}, ${A2(ti.gender)} и ${A2(ti.gender)} ${nounInfo(ti.gender).word}!`},
-    {id:'t8',len:'long',f:()=>`${addressedTarget}, ты ${A(ti.gender)}, ${A2(ti.gender)} и ${A2(ti.gender)} ${nounInfo(ti.gender).word}!`},
-    {id:'t9',len:'long',f:()=>`${addressedTarget}, ты ${A(ti.gender)} ${nounInfo(ti.gender).word} ${rolePhrase(ti.gender)}!`},
-
-    // Цель как часть правой группы.
-    {id:'t21',len:'long',f:()=>`${A(ti.gender)} ${nounInfo(ti.gender).word} — ${A2(ti.gender)} ${addressedTarget}!`},
-    {id:'t22',len:'long',f:()=>`${A(ti.gender)} ${nounInfo(ti.gender).word} — ${A2(ti.gender)} ${rolePhrase(ti.gender)} ${addressedTarget}!`},
-    {id:'t23',len:'long',f:()=>`${A(ti.gender)} ${A2(ti.gender)} ${addressedTarget} — ${adv()} ${A2(ti.gender)} ${nounInfo(ti.gender).word}!`},
-    {id:'t24',len:'long',f:()=>`${A(ti.gender)} ${rolePhrase(ti.gender)} ${addressedTarget} — ${A2(ti.gender)}, ${A2(ti.gender)} и ${A2(ti.gender)} ${nounInfo(ti.gender).word}!`},
-    {id:'t25',len:'long',f:()=>`${A(ti.gender)} ${nounInfo(ti.gender).word} — ${addressedTarget}, ${adv()} ${A2(ti.gender)} ${rolePhrase(ti.gender)}!`},
-    {id:'t26',len:'long',f:()=>`${adv()} ${A(ti.gender)} ${addressedTarget} — ${A2(ti.gender)} и ${A2(ti.gender)} ${rolePhrase(ti.gender)}!`},
-    // Дополнительные позиции цели. Здесь имя не превращается в «слово для
-    // морфологии»: оно остаётся буквально введённым пользователем.
-    {id:'t27',len:'medium',f:()=>`${rolePhrase(ti.gender)} ${addressedTarget}!`},
-    {id:'t28',len:'medium',f:()=>`${A(ti.gender)} ${rolePhrase(ti.gender)} — ${addressedTarget}!`},
-    {id:'t29',len:'medium',f:()=>`${A(ti.gender)} ${nounInfo(ti.gender).word} — ${addressedTarget}, ты ${rolePhrase(ti.gender)}!`},
-    {id:'t30',len:'medium',f:()=>`${A(ti.gender)} ${addressedTarget}, ты ${nounInfo(ti.gender).word} — ${rolePhrase(ti.gender)}!`},
-    {id:'t31',len:'long',f:()=>`${addressedTarget} — ${A(ti.gender)}, ${A2(ti.gender)} ${nounInfo(ti.gender).word} и ${rolePhrase(ti.gender)}!`},
-    {id:'t32',len:'long',f:()=>`${A(ti.gender)} ${nounInfo(ti.gender).word} ${addressedTarget} — ${adv()} ${A2(ti.gender)} ${rolePhrase(ti.gender)}!`},
-    {id:'t33',len:'long',f:()=>`${A(ti.gender)} ${rolePhrase(ti.gender)} — ${addressedTarget}, ${A2(ti.gender)} ${nounInfo(ti.gender).word}!`},
-    {id:'t34',len:'long',f:()=>`${A(ti.gender)} ${A2(ti.gender)} ${nounInfo(ti.gender).word} — ${rolePhrase(ti.gender)}, ${addressedTarget}!`}
-  ] : [];
-
-  // ---------------- Construction grammar / old-school balance ----------------
-  // Базовая архитектура остаётся конструкционной: сначала выбирается тип
-  // высказывания, затем его группы и только после этого слова. При этом
-  // распределение специально сдвинуто в сторону старой манеры damn.ru:
-  // простая именная группа, цепочка определений, тире между двумя группами,
-  // управляющее слово с зависимым существительным. Новые алгоритмы
-  // diversity/coverage/морфологии продолжают работать внутри этих классов.
-  // 0.833 OLD-SCHOOL DAMN LAYER
-  // В старой манере важен не «красивый» русский текст, а ощущение случайно
-  // склеенных словарных блоков: короткая именная группа, два независимых
-  // определения, тире между несвязанными группами, роль + объект, а иногда
-  // намеренно абсурдная падежная связка. Этот слой ставится перед обычной
-  // construction-грамматикой и не меняет сам словарь.
-  function oldSchoolPhraseRaw(L){
-    const pickN=()=>nounInfo();
-    const gN=(g)=>nounInfo(g);
-    const simple=(g)=>{const n=gN(g); return `${A(n.gender,false)} ${n.word}`;};
-    const double=(g)=>{const n=gN(g); return `${A(n.gender,false)}, ${A2(n.gender)} ${n.word}`;};
-    const triple=(g)=>{const n=gN(g); return `${A(n.gender,false)}, ${A2(n.gender)} и ${A2(n.gender)} ${n.word}`;};
-    const role=(g)=>rolePhrase(g);
-    const dash=(a,b)=>clean(`${a} — ${b}!`);
-    const a=pickN(), b=pickN();
-
-    if(L==='short'){
-      const r=Math.random();
-      if(r<.20) return clean(`${simple(a.gender)}!`);
-      if(r<.34) return clean(`${double(a.gender)}!`);
-      if(r<.46) return clean(`${role(a.gender)}!`);
-      if(r<.58) return dash(simple(a.gender),simple(b.gender));
-      if(r<.68) return dash(simple(a.gender),role(b.gender));
-      if(r<.77) return dash(a.word,simple(b.gender));
-      if(r<.87) return clean(`${role(a.gender)} ${genitiveNoun(b.word,b.gender)}!`);
-      if(r<.94) return clean(`${A(a.gender,false)} ${a.word} ${genitiveNoun(b.word,b.gender)}!`);
-      return clean(`${a.word} — ${A(b.gender,false)} ${b.word}!`);
-    }
-
-    if(L==='medium'){
-      const r=Math.random();
-      if(r<.13) return clean(`${double(a.gender)}!`);
-      if(r<.24) return clean(`${triple(a.gender)}!`);
-      if(r<.34) return clean(`${role(a.gender)} ${genitiveNoun(b.word,b.gender)}!`);
-      if(r<.45) return dash(simple(a.gender),double(b.gender));
-      if(r<.55) return dash(double(a.gender),simple(b.gender));
-      if(r<.65) return dash(role(a.gender),simple(b.gender));
-      if(r<.74) return dash(simple(a.gender),role(b.gender));
-      if(r<.82) return clean(`${adv()} ${simple(a.gender)}!`);
-      if(r<.90) return clean(`${A(a.gender,false)} ${a.word} ${genitiveNoun(b.word,b.gender)} — ${A2(b.gender)} ${b.word}!`);
-      return clean(`${a.word}, ${A(a.gender,false)} ${role(a.gender)} — ${A2(b.gender)} ${b.word}!`);
-    }
-
-    const r=Math.random();
-    if(r<.12) return clean(`${triple(a.gender)}!`);
-    if(r<.22) return clean(`${adv()} ${double(a.gender)}!`);
-    if(r<.32) return dash(triple(a.gender),simple(b.gender));
-    if(r<.42) return dash(simple(a.gender),triple(b.gender));
-    if(r<.52) return dash(role(a.gender),double(b.gender));
-    if(r<.61) return dash(double(a.gender),role(b.gender));
-    if(r<.70) return clean(`${role(a.gender)} ${genitiveNoun(b.word,b.gender)} — ${A2(b.gender)} ${b.word}!`);
-    if(r<.79) return clean(`${triple(a.gender)} — ${adv()} ${role(b.gender)}!`);
-    if(r<.88) return clean(`${adv()} ${role(a.gender)} — ${double(b.gender)}!`);
-    if(r<.94) return clean(`${a.word} ${genitiveNoun(b.word,b.gender)} ${participle(a.gender)}!`);
-    return clean(`${simple(a.gender)} — ${double(b.gender)}, ${A2(b.gender)} и ${A2(b.gender)} ${b.word}!`);
+  function buildPhrase(L){
+    const pool=FRAMES.filter(x=>x.t===!!target && x.w[L]>0).map(x=>({id:x.id,w:x.w[L],f:()=>x.f(L)}));
+    const frame=schemePick(pool,'unified',ctx,diversity);
+    ctx.schemes.add(frame.id);
+    return clean(frame.f()+'!');
   }
 
-  // 0.927 DAMN-SCREENSHOT CONSTRUCTION LAYER
-  // Сверено по архивным скринам: не один шаблон «ADV + A + N», а набор
-  // независимых рисунков. Усилитель может относиться к первому, второму или
-  // третьему определению, а после тире может начинаться новая группа со своим
-  // усилителем. Это специально оставляет старую нерегулярность damn.ru.
-  function damnScreenshotPhraseRaw(L){
-    const g = chaos ? groupGender() : gender;
-    const n = nounInfo(g), n2 = nounInfo(g), n3 = nounInfo(g), n4 = nounInfo(g);
-    const simple = (nn=n)=>`${A(g,false)} ${nn.word}`;
-    const advSimple = (nn=n)=>`${adv()} ${A(g,false)} ${nn.word}`;
-    const pair = (nn=n)=>`${A(g,false)} и ${A2(g)} ${nn.word}`;
-    const pairAdvFirst = (nn=n)=>`${adv()} ${A(g,false)} и ${A2(g)} ${nn.word}`;
-    const pairAdvSecond = (nn=n)=>`${A(g,false)} и ${adv()} ${A2(g)} ${nn.word}`;
-    const double = (nn=n)=>`${A(g,false)}, ${A2(g)} ${nn.word}`;
-    const doubleAdvFirst = (nn=n)=>`${adv()} ${A(g,false)}, ${A2(g)} ${nn.word}`;
-    const doubleAdvSecond = (nn=n)=>`${A(g,false)}, ${adv()} ${A2(g)} ${nn.word}`;
-    const advDouble = (nn=n)=>`${adv()} ${A(g,false)}, ${A2(g)} ${nn.word}`;
-    const triple = (nn=n)=>`${A(g,false)}, ${A2(g)} и ${A2(g)} ${nn.word}`;
-    const tripleAdvFirst = (nn=n)=>`${adv()} ${A(g,false)}, ${A2(g)} и ${A2(g)} ${nn.word}`;
-    const tripleAdvMiddle = (nn=n)=>`${A(g,false)}, ${adv()} ${A2(g)} и ${A2(g)} ${nn.word}`;
-    const tripleAdvLast = (nn=n)=>`${A(g,false)}, ${A2(g)} и ${adv()} ${A2(g)} ${nn.word}`;
-    const tripleTwoAdv = (nn=n)=>`${adv()} ${A(g,false)}, ${A2(g)} и ${adv()} ${A2(g)} ${nn.word}`;
-    const role = ()=>rolePhrase(g);
-    const roleWithAdj = ()=>`${A2(g)} ${rolePhrase(g)}`;
-    const dash=(a,b)=>clean(`${a} — ${b}!`);
-
-    if(L==='short'){
-      const r=Math.random();
-      if(r<.12) return clean(`${simple()}!`);
-      if(r<.22) return clean(`${double()}!`);
-      if(r<.31) return clean(`${pair()}!`);
-      if(r<.39) return clean(`${role()}!`);
-      if(r<.49) return clean(`${advSimple()}!`);
-      if(r<.58) return clean(`${doubleAdvFirst()}!`);
-      if(r<.66) return clean(`${doubleAdvSecond()}!`);
-      if(r<.74) return clean(`${pairAdvFirst()}!`);
-      if(r<.82) return clean(`${pairAdvSecond()}!`);
-      if(r<.89) return dash(simple(n),simple(n2));
-      if(r<.95) return dash(roleWithAdj(),simple(n2));
-      return dash(n.word,advSimple(n2));
-    }
-
-    if(L==='medium'){
-      const r=Math.random();
-      if(r<.09) return clean(`${double()}!`);
-      if(r<.17) return clean(`${triple()}!`);
-      if(r<.25) return clean(`${pairAdvFirst()}!`);
-      if(r<.33) return clean(`${pairAdvSecond()}!`);
-      if(r<.41) return clean(`${doubleAdvFirst()}!`);
-      if(r<.49) return clean(`${doubleAdvSecond()}!`);
-      if(r<.56) return clean(`${tripleAdvFirst()}!`);
-      if(r<.63) return clean(`${tripleAdvMiddle()}!`);
-      if(r<.70) return clean(`${tripleAdvLast()}!`);
-      if(r<.76) return clean(`${role()} ${genitiveNoun(n2.word,g)}!`);
-      if(r<.82) return dash(double(n),simple(n2));
-      if(r<.87) return dash(doubleAdvFirst(n),simple(n2));
-      if(r<.92) return dash(roleWithAdj(),double(n2));
-      if(r<.96) return dash(simple(n),roleWithAdj());
-      return clean(`${adv()} ${simple()} ${genitiveNoun(n2.word,g)}!`);
-    }
-
-    const r=Math.random();
-    if(r<.07) return clean(`${triple()}!`);
-    if(r<.14) return clean(`${tripleAdvFirst()}!`);
-    if(r<.21) return clean(`${tripleAdvMiddle()}!`);
-    if(r<.28) return clean(`${tripleAdvLast()}!`);
-    if(r<.35) return clean(`${tripleTwoAdv()}!`);
-    if(r<.42) return clean(`${adv()} ${triple()}!`);
-    if(r<.48) return dash(triple(n),simple(n2));
-    if(r<.54) return dash(triple(n),advSimple(n2));
-    if(r<.60) return dash(tripleAdvFirst(n),simple(n2));
-    if(r<.66) return dash(simple(n),triple(n2));
-    if(r<.72) return dash(simple(n),tripleAdvLast(n2));
-    if(r<.78) return dash(roleWithAdj(),double(n2));
-    if(r<.84) return dash(doubleAdvFirst(n),roleWithAdj());
-    if(r<.89) return clean(`${role()} ${genitiveNoun(n2.word,g)} — ${A2(g)} ${n.word}!`);
-    if(r<.94) return clean(`${adv()} ${roleWithAdj()} — ${doubleAdvSecond(n2)}!`);
-    if(r<.97) return clean(`${advSimple(n)} — ${advDouble(n2)}!`);
-    return clean(`${simple(n)} — ${tripleTwoAdv(n2)}!`);
-  }
-
-  // 0.900 EXPERIMENTAL OLD SCHOOL ENGINE
-  // Не заменяет Classic: это отдельный пробный слой. Мужской/женский/смешанный/
-  // хаос остаются прежними; меняется только способ сборки фразы.
-  function oldSchoolExperimentalPhraseRaw(L){
-    // 0.925: упрощённая грамматика в духе старого damn.ru.
-    // Без составного слова фраза должна выглядеть как обычная короткая
-    // конструкция; безумие создаётся сочетанием слов, усилителей и 1 ударной
-    // составной лексемы, а не сложной грамматикой.
-    const g = chaos ? groupGender() : gender;
-    const n = nounInfo(g), n2 = nounInfo(g), n3 = nounInfo(g);
-    const targetWord = (typeof target !== 'undefined' && target) ? String(target).trim() : '';
-    const compChance = 0; // 0.940: составные слова подмешиваются в adjective()/nounInfo()
-    const comp = ()=>{
-      const kind = chance(.72) ? 'adj' : 'noun';
-      const raw = generatedCompoundWord(kind,ctx);
-      const safe = sanitizeCompound(raw,kind);
-      ctx.compoundFreq = ctx.compoundFreq || new Map();
-      ctx.compoundFreq.set(safe,(ctx.compoundFreq.get(safe)||0)+1);
-      return kind==='adj' ? compoundAdjectiveGender(safe,g) : compoundNounGender(safe,g);
-    };
-    const Aold = ()=> (Math.random()<compChance ? comp() : A(g,false));
-    const Aold2 = ()=> (Math.random()<(compChance*.72) ? comp() : A2(g));
-    const ad = ()=>adv();
-    const role = ()=>rolePhrase(g);
-    const finish = x=>clean(x.endsWith('!')?x:x+'!');
-    const nameVariants = body => {
-      if(!target) return body;
-      const forms = [
-        `${target}, ты ${body}`,
-        `${target} — ${body}`,
-        `${body} ${target}`,
-        `${body} — ${target}`,
-        `${target}, ${body}`
-      ];
-      return forms[Math.floor(Math.random()*forms.length)];
-    };
-    const simple = ()=>`${Aold()} ${n.word}`;
-    const double = ()=>`${Aold()}, ${Aold2()} ${n.word}`;
-    const triple = ()=>`${Aold()}, ${Aold2()} и ${Aold2()} ${n.word}`;
-    const dashSimple = ()=>`${simple()} — ${simple()}`;
-    const dashDouble = ()=>`${simple()} — ${double()}`;
-    const addressed = ()=> target ? `${target}, ты ${Aold()} ${n.word}` : `${Aold()} ${n.word}`;
-
-    if(L==='short'){
-      const r=Math.random();
-      if(r<.22) return finish(nameVariants(simple()));
-      if(r<.39) return finish(nameVariants(double()));
-      if(r<.52) return finish(nameVariants(role()));
-      if(r<.64) return finish(nameVariants(`${ad()} ${simple()}`));
-      if(r<.75) return finish(nameVariants(dashSimple()));
-      if(r<.86) return finish(nameVariants(`${Aold()} ${role()}`));
-      return finish(nameVariants(`${n.word} — ${Aold2()} ${n2.word}`));
-    }
-
-    if(L==='medium'){
-      const r=Math.random();
-      if(r<.20) return finish(nameVariants(double()));
-      if(r<.35) return finish(nameVariants(triple()));
-      if(r<.47) return finish(nameVariants(`${ad()} ${double()}`));
-      if(r<.59) return finish(nameVariants(`${Aold()} ${role()}`));
-      if(r<.70) return finish(nameVariants(dashDouble()));
-      if(r<.81) return finish(nameVariants(`${double()} — ${Aold2()} ${n2.word}`));
-      if(r<.90) return finish(nameVariants(`${role()} — ${Aold()} ${n2.word}`));
-      return finish(nameVariants(addressed()));
-    }
-
-    const r=Math.random();
-    if(r<.20) return finish(nameVariants(triple()));
-    if(r<.32) return finish(nameVariants(`${ad()} ${triple()}`));
-    if(r<.43) return finish(nameVariants(`${ad()} ${double()}`));
-    if(r<.55) return finish(nameVariants(`${triple()} — ${simple()}`));
-    if(r<.66) return finish(nameVariants(`${simple()} — ${triple()}`));
-    if(r<.76) return finish(nameVariants(`${double()} — ${double()}`));
-    if(r<.85) return finish(nameVariants(`${role()} — ${triple()}`));
-    if(r<.92) return finish(nameVariants(`${ad()} ${role()} — ${double()}`));
-    return finish(nameVariants(`${triple()} ${role()}`));
-  }
-
-  function constructionPhraseRaw(){
-    const L=length;
-
-    // 0.833: основная масса обычных генераций идёт через старую
-    // конструкционную манеру; специализированные target/chaos/compound
-    // ветки остаются отдельными. Чем короче фраза, тем выше доля старого
-    // простого рисунка; длинные получают больше тире и составных групп.
-    const oldChance = L==='short' ? .72 : (L==='medium' ? .68 : .64);
-    if(chance(oldChance)) return oldSchoolPhraseRaw(L);
-
-    // Style balance 0.828: простые группы теперь заметно чаще, тире — реже,
-    // а «свободные» старошкольные конструкции получили отдельный небольшой
-    // шанс. Цель — не сделать грамматику строже, а убрать ощущение матрицы.
-    const rareChance = L==='long' ? .095 : (L==='medium' ? .075 : .06);
-    if(chance(rareChance)){
-      const a=nounInfo();
-      const r=Math.random();
-      if(r<.34){
-        const b=freeNounInfo();
-        const c=freeNounInfo();
-        const dep=genitivePluralNoun(b.word,b.gender)||genitiveNoun(b.word,b.gender);
-        return clean(`${a.word} ${dep} ${instrumentalNoun(c.word,c.gender)} ${participle(a.gender)}!`);
-      }
-      if(r<.58) return clean(`${adv()} ${participle(a.gender)} ${a.word}!`);
-      if(r<.78) return clean(`${a.word}, ${participle(a.gender)}!`);
-      if(r<.90){
-        const b=freeNounInfo();
-        return clean(`${a.word} ${genitiveNoun(b.word,b.gender)}!`);
-      }
-      return clean(`${participle(a.gender)} ${a.word}, ${participle(a.gender)}!`);
-    }
-
-    const group=(g,mode)=>{
-      const x=nounInfo(g);
-      const nounText=GENITIVE_ROLE_MALE.has(x.word)||GENITIVE_ROLE_FEMALE.has(x.word) ? rolePhraseForWord(x.word,x.gender) : x.word;
-      if(mode==='noun') return nounText;
-      if(mode==='aN') return `${A(x.gender,false)} ${nounText}`;
-      if(mode==='advAN') return `${adv()} ${A(x.gender,false)} ${nounText}`;
-      if(mode==='aaN') return `${A(x.gender,false)}, ${A2(x.gender)} ${nounText}`;
-      if(mode==='aaaN') return `${A(x.gender,false)}, ${A2(x.gender)} и ${A2(x.gender)} ${nounText}`;
-      if(mode==='a2N') return `${A(x.gender,false)} ${A2(x.gender)} ${nounText}`;
-      if(mode==='role') return rolePhrase(x.gender);
-      if(mode==='aRole') return `${A(x.gender,false)} ${rolePhrase(x.gender)}`;
-      if(mode==='advRole') return `${adv()} ${A(x.gender,false)} ${rolePhrase(x.gender)}`;
-      return `${A(x.gender,false)} ${x.word}`;
-    };
-
-    const dash=(left,right)=>clean(`${left} — ${right}!`);
-
-    if(L==='short'){
-      const r=Math.random();
-      if(r<.27) return clean(`${group(undefined,'aN')}!`);
-      if(r<.39) return clean(`${group(undefined,'noun')}!`);
-      if(r<.50) return clean(`${group(undefined,'aRole')}!`);
-      if(r<.59){ const a=nounInfo(); return dash(group(a.gender,'noun'),group(a.gender,'aN')); }
-      if(r<.67){ const a=nounInfo(); return dash(group(a.gender,'aN'),group(a.gender,'noun')); }
-      if(r<.75){ const a=nounInfo(); return dash(group(a.gender,'aN'),group(a.gender,'aN')); }
-      if(r<.84) return clean(`${group(undefined,'advAN')}!`);
-      if(r<.92){ const a=nounInfo(); return dash(group(a.gender,'noun'),group(a.gender,'role')); }
-      return clean(`${group(undefined,'role')}!`);
-    }
-
-    if(L==='medium'){
-      const r=Math.random();
-      if(r<.18) return clean(`${group(undefined,'aN')}!`);
-      if(r<.31) return clean(`${group(undefined,'a2N')}!`);
-      if(r<.43) return clean(`${group(undefined,'aRole')}!`);
-      if(r<.53) return clean(`${group(undefined,'advAN')}!`);
-      if(r<.61){ const a=nounInfo(); return dash(group(a.gender,'aN'),group(a.gender,'aN')); }
-      if(r<.69){ const a=nounInfo(); return dash(group(a.gender,'noun'),group(a.gender,'aRole')); }
-      if(r<.76){ const a=nounInfo(); return dash(group(a.gender,'aN'),group(a.gender,'role')); }
-      if(r<.83) return clean(`${group(undefined,'aaaN')}!`);
-      if(r<.91) return clean(`${group(undefined,'role')}!`);
-      return clean(`${group(undefined,'noun')}!`);
-    }
-
-    // Long: длинные цепочки остаются, но не доминируют над короткими группами.
-    {
-      const r=Math.random();
-      if(r<.16) return clean(`${group(undefined,'aaaN')}!`);
-      if(r<.27) return clean(`${adv()} ${group(undefined,'aN')}!`);
-      if(r<.38) return clean(`${group(undefined,'a2N')}!`);
-      if(r<.49){ const a=nounInfo(); return dash(group(a.gender,'aN'),group(a.gender,'aaaN')); }
-      if(r<.58){ const a=nounInfo(); return dash(group(a.gender,'aaaN'),group(a.gender,'aN')); }
-      if(r<.66){ const a=nounInfo(); return dash(group(a.gender,'aN'),group(a.gender,'aRole')); }
-      if(r<.73){ const a=nounInfo(); return dash(group(a.gender,'noun'),group(a.gender,'role')); }
-      if(r<.82) return clean(`${group(undefined,'advRole')}!`);
-      if(r<.89){
-        const x=nounInfo();
-        return clean(`${adv()} ${A(x.gender,false)}, ${A2(x.gender)} и ${A2(x.gender)} ${x.word}!`);
-      }
-      return clean(`${group(undefined,'aRole')}!`);
-    }
-  }
-
-  function chaosLoosePhrase(){
-    const g1=groupGender();
-    const g2=groupGender();
-    const n1=nounInfo(g1), n2=nounInfo(g2);
-    const mode=Math.random();
-    if(mode<.24) return clean(`${A(g1,false)} ${n1.word}!`);
-    if(mode<.40) return clean(`${n1.word}!`);
-    if(mode<.56) return clean(`${A(g1,false)} ${rolePhrase(g1)}!`);
-    if(mode<.70) return clean(`${adv()} ${A(g1,false)} ${n1.word}!`);
-    if(mode<.84) return clean(`${A(g1,false)}, ${A2(g1)} и ${A2(g1)} ${n1.word}!`);
-    return clean(`${A(g1,false)} ${n1.word}, ${A2(g2)} ${n2.word}!`);
-  }
-
-  function constructionFamily(text){
-    const t=String(text||'');
-    if(/ — /.test(t)){
-      if(/ — [^!]*\b(пожиратель|глотатель|требователь|обожатель|расхититель|раздиратель|сношатель|представитель|ломатель|соблазнитель)/u.test(t)) return 'dash-role';
-      if(/ — /.test(t) && (t.match(/ — /g)||[]).length===1) return 'dash';
-    }
-    if(/, [^!]+ и [^!]+ [^!]+!$/.test(t)) return 'chain';
-    if(/^— /.test(t)) return 'address';
-    if(/\b(пожиратель|глотатель|требователь|обожатель|расхититель|раздиратель|сношатель|представитель|ломатель|соблазнитель)(?:ница)?\b/u.test(t)) return 'role';
-    if(/, [^!]+!$/.test(t)) return 'post';
-    if(/^[^ ]+ [^ ]+ [^ ]+!$/.test(t)) return 'triple';
-    if(/^[^ ]+ [^ ]+!$/.test(t)) return 'aN';
-    return 'noun';
-  }
-  function constructionPhrase(){
-    // 0.943: на низком разнообразии (0…50%) пачка с вероятностью до 85% повторяет прошлое семейство конструкции.
-    const stick=diversity<.5?(.5-diversity)*1.7:0;
-    if(ctx.lastFam && Math.random()<stick){
-      for(let i=0;i<10;i++){
-        const o=constructionPhraseRaw(), f=constructionFamily(o);
-        if(f===ctx.lastFam){ ctx.schemes.add('base:'+f); return o; }
-      }
-    }
-    // Повторяем только при совпадении семейства конструкции. Слова по-прежнему
-    // выбираются прежним механизмом diversity, поэтому мы не меняем его работу.
-    for(let i=0;i<7;i++){
-      const out=constructionPhraseRaw();
-      const fam=constructionFamily(out);
-      if(!ctx.schemes.has('base:'+fam) || diversity<0.55){
-        ctx.schemes.add('base:'+fam); ctx.lastFam=fam;
-        return out;
-      }
-    }
-    const out=constructionPhraseRaw();
-    ctx.lastFam=constructionFamily(out);
-    ctx.schemes.add('base:'+ctx.lastFam);
-    return out;
-  }
-
-
-  // 0.833: общая проверка длины применяется не только к составным,
-  // но и к обычным/target/chaos схемам. В старой версии medium/long могли
-  // выбрать короткую схему из-за общей конструкции, поэтому «Средние» иногда
-  // давали 1–2 слова, а «Длинные» — 2–3.
-  const phraseWordCount = text => String(text||'').replace(/[!?.,:;]+$/u,'').trim().split(/\s+/u).filter(Boolean).length;
+  // Минимальная длина фразы по выбранной длине: «короткие» ≥2 слов, «средние» ≥3, «длинные» ≥4.
+  const phraseWordCount = text => String(text||'').replace(/[!?.,:;]+$/u,'').trim().split(/\s+/u).filter(x=>x&&x!=='—').length;
   const minPhraseWords = L => L==='short' ? 2 : (L==='medium' ? 3 : 4);
-  function ensurePhraseLength(out,L){
-    const min=minPhraseWords(L);
-    if(phraseWordCount(out)>=min) return out;
-    for(let attempt=0;attempt<10;attempt++){
-      const retry=constructionPhraseRaw();
-      if(phraseWordCount(retry)>=min) return retry;
+  const maxPhraseWords = L => L==='short' ? 6 : (L==='medium' ? 10 : 15);   // +1 слово остаётся для наречия из cmAdvInject
+  const sane = t => t && !/undefined|NaN|\[object|\s{2,}/.test(t);
+  function buildChecked(L){
+    for(let i=0;i<12;i++){
+      const o=buildPhrase(L);
+      const n=phraseWordCount(o);
+      if(sane(o) && n>=minPhraseWords(L) && n<=maxPhraseWords(L)) return o;
     }
     const g=chaos ? groupGender() : gender;
-    const n1=nounInfo(g), n2=nounInfo(g), n3=nounInfo(g);
-    if(L==='short') return clean(`${A(g,false)} ${n1.word}!`);
-    if(L==='medium') return clean(`${A(g,false)} ${n1.word} ${genitiveNoun(n2.word,g)}!`);
-    return clean(`${A(g,false)}, ${A2(g)} ${n1.word} и ${A2(g)} ${n2.word} ${genitiveNoun(n3.word,g)}!`);
+    const need=Math.min(3,minPhraseWords(L)-1);                 // страховка выдерживает минимальную длину
+    return clean(`${adjChain(g,need)} ${nounInfo(g).word}!`);
   }
+  let out=buildChecked(length);
 
-  // 0.927 UNIFIED ENGINE
-  // Один движок объединяет старые конструкционные схемы и Old School-слой.
-  // Режимы мужской/женский/смешанный/хаос остаются параметрами одного и того же
-  // генератора, а не отдельными генераторами.
-  let out='';
-  const oldWeight = length==='short' ? .64 : (length==='medium' ? .60 : .56);
-  const cmTiny=()=>{
-    // Короткие формы из архивных примеров: «Имя, ты NOUN!», «Имя — NOUN!», «Имя — NOUN ADJ!», без цели: «ты NOUN!», «NOUN ADJ!».
-    const g=chaos?groupGender():gender;
-    const noun=()=>{ const x=nounInfo(g); return x.target? word(g==='female'?DB.female:DB.male,'noun') : x.word; };
-    const r=Math.random();
-    let body;
-    if(target){
-      if(r<.40) body=`${target}, ты ${noun()}`;
-      else if(r<.75) body=`${target} — ${noun()}`;
-      else body=`${target} — ${noun()} ${adjectiveForGender(word(DB.adj,'adj'),g)}`;
-    }else{
-      if(r<.45) body=`ты ${noun()}`;
-      else if(r<.80) body=`${noun()} ${adjectiveForGender(word(DB.adj,'adj'),g)}`;
-      else body=`ты ${adjectiveForGender(word(DB.adj,'adj'),g)} ${noun()}`;
-    }
-    return clean(body+'!');
-  };
-  if(length==='short' && chance(.15)) out=cmTiny();
-  else if(chaos && !target && chance(.22)) out=chaosLoosePhrase();
-  else if(chance(oldWeight)){
-    out=chance(.68) ? damnScreenshotPhraseRaw(length) : oldSchoolExperimentalPhraseRaw(length);
-  }
-  else {
-    const sourceSchemes = chaos ? (target ? chaosTargetSchemes : chaosSchemes) : (target ? targetSchemes : null);
-    if(!sourceSchemes) out=constructionPhrase();
-    else {
-      let pool=sourceSchemes.filter(s=>s.len===length);
-      if(!pool.length) pool=sourceSchemes;
-      const scheme=schemePick(pool,target ? (chaos?'chaosTarget':'target') : (chaos?'chaos':'base'),ctx,diversity);
-      ctx.schemes.add(scheme.id);
-      out=clean(scheme.f());
-    }
-  }
-
-  // Имя/цель — обязательная часть каждой фразы, если пользователь его задал.
+  // Имя/цель — обязательная часть каждой фразы, если пользователь его задал (страховка: рамки уже содержат имя).
   if(target){
     const tw=String(target).trim();
     if(tw && !String(out).toLocaleLowerCase().includes(tw.toLocaleLowerCase())){
       const core=String(out).replace(/!\s*$/,'').trim();
-      const variants=[`${tw}, ты ${core}`,`${tw} — ${core}`,`${core}, ${tw}`,`${tw}: ${core}`];
-      out=clean(variants[Math.floor(Math.random()*variants.length)]+'!');
-    }
-  }
-  out=ensurePhraseLength(out,length);
-  if(target){
-    const tw=String(target).trim();
-    if(tw && !String(out).toLocaleLowerCase().includes(tw.toLocaleLowerCase())){
-      const core=String(out).replace(/!\s*$/,'').trim();
-      const variants=[`${tw}, ты ${core}`,`${tw} — ${core}`,`${core}, ${tw}`,`${tw}: ${core}`];
-      out=clean(variants[Math.floor(Math.random()*variants.length)]+'!');
+      out=clean(`${tw}, ты ${core}!`);
     }
   }
   return out;
@@ -2194,10 +1754,10 @@ function cmAdvOne(){
 // 0.941: в архивных примерах ~60% фраз содержат наречие, а перечисления часто идут как
 // «чрезмерно X, Y и невероятно Z». Если шаблон выдал мало усилителей — добавляем наречие перед
 // прилагательным, за которым идёт слово (т.е. оно стоит перед существительным или другим прилагательным).
-function cmAdvInject(out,tg){
+function cmAdvInject(out,tg,bctx){
   const rx=cmAdvOne(); if(!rx) return out;
   const have=(out.match(rx)||[]).length;
-  const p=have===0?.68:(have===1?.50:(have===2?.12:0));
+  const p=have===0?.82:(have===1?.50:(have===2?.12:0));
   if(Math.random()>=p) return out;
   const parts=out.split(/(\s+)/);
   const nameWords=new Set(String(tg||'').toLowerCase().split(/\s+/).filter(Boolean));
@@ -2216,6 +1776,11 @@ function cmAdvInject(out,tg){
   const a=advs[Math.floor(Math.random()*advs.length)];
   parts[i]=a+' '+parts[i];
   const res=parts.join('');
+  // не раздуваем фразу выше потолка выбранной длины («в самом деле» — это три слова)
+  const lenSet=(typeof document!=='undefined'&&document.querySelector('#length'))?document.querySelector('#length').value:'random';
+  const L=lenSet==='random'?(bctx&&bctx.lastLen):lenSet;
+  const cap=({short:7,medium:11,long:16})[L]||16;
+  if(res.replace(/[!]+$/,'').trim().split(/\s+/).filter(x=>x!=='—').length>cap-(tg?1:0)) return out;
   return cmPhraseBad(res)?out:res;
 }
 function cmPhraseBad(t){
@@ -2260,14 +1825,14 @@ function makePhrase(gender, batchCtx, allowTarget=true){
     out=makePhraseCore(gender,batchCtx,allowTarget);
     if(allowTarget!==false) out=cmFixTarget(out);
     if(cmPhraseBad(out)) continue;
-    if(!tg) return cmAdvInject(out,tg);
+    if(!tg) return cmAdvInject(out,tg,batchCtx);
     let fam=cmNameFamily(out,tg);
     if(fam==='bad'){ const cv=cmConvert(out,tg); if(cv && !cmPhraseBad(cv) && cmNameFamily(cv,tg)!=='bad'){ out=cv; fam=cmNameFamily(cv,tg); } }
-    if(fam===want) return cmAdvInject(out,tg);
+    if(fam===want) return cmAdvInject(out,tg,batchCtx);
     if(fam!=='bad' && !fallback) fallback=out;
     if(!firstGood) firstGood=out;
   }
-  return cmAdvInject(fallback||firstGood||out,tg);
+  return cmAdvInject(fallback||firstGood||out,tg,batchCtx);
 }
 function malePhrase(){ return makePhrase('male'); }
 function femalePhrase(){ return makePhrase('female'); }
