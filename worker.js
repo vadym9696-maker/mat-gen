@@ -1,9 +1,9 @@
-// Generator core extracted from ГЕНЕРАТОР МАТА 0.944.
+// Generator core extracted from ГЕНЕРАТОР МАТА 0.945.
 // Telegram adapter supplies the small DOM-like settings interface used by the original engine.
 'use strict';
 
-const VERSION = '0.944';
-const BUILD_NOTE = 'единый генератор фраз, зависимые обороты, расширенные составные (v8)';
+const VERSION = '0.945';
+const BUILD_NOTE = 'подгонка под damn.ru: наречия, списки определений, причастия, управляющие слова, составные (v9)';
 
 const runtimeSettings = {
   diversity: 50,
@@ -72,7 +72,7 @@ function shuffle(a){
 //   50%  — около трети пула и мягкий анти-повтор;
 //   100% — весь пул и жёсткое «не повторять», схемы идут по кругу.
 // Фокус задаётся хэшем слова и случайным зерном пачки (ctx.seed), поэтому он не требует хранения списков.
-function divFocusFrac(d){ return Math.min(1,Math.max(0.05,0.05+0.95*d*d)); }     // 0% → 5% пула, 50% → ~29%, 75% → ~58%, 100% → весь пул
+function divFocusFrac(d){ return Math.min(1,Math.max(0.05,0.05+0.95*Math.pow(d,1.5))); }     // 0% → 5% пула, 50% → ~29%, 75% → ~58%, 100% → весь пул
 function divSchemeFrac(d){ return Math.min(1,Math.max(0.2,0.2+0.8*d)); }
 function divSeed(ctx){ if(ctx.seed==null) ctx.seed=(Math.random()*4294967296)>>>0; return ctx.seed; }
 function divHash(str,seed){
@@ -1367,27 +1367,29 @@ function makePhraseCore(gender, batchCtx, allowTarget=true){
   // 0.941: в архивных примерах около половины фраз содержат причастия/отглагольные прилагательные
   // («эякулирующий», «кудахтающий», «обдрочившийся», «отраханный», «заёбанный»).
   const PARTS=['курящий','кудахтающий','изнывающий','эякулирующий','обдрочившийся','ожиревший','отраханный','дрочканутый','заёбанный','недоссанный','попользованный','обкончанный','дрочащий','ссущий','срущий','пердящий','хрюкающий','воняющий','потеющий','слюнявящий','сопящий','чавкающий','обосравшийся','обделавшийся','опухший','облезший','засранный','обдолбанный','обтраханный','выебанный','отсосавший','зассанный','обкаканный','обоссанный','изуродованный','ёбнутый','кривляющийся','визжащий','гнусавящий','трясущийся'];
-  const CM_PART_P=0.24;
-  const CM_ADJ_P=0.66, CM_NOUN_P=0.26;
+  const CM_PART_P=0.22;
+  const CM_ADJ_P=0.92, CM_NOUN_P=0.46;
   const adjective=(g)=>{
-    if(chance(CM_ADJ_P)){
-      const raw=generatedCompoundWord('adj',ctx);
-      return compoundAdjectiveGender(sanitizeCompound(raw,'adj'),g);
-    }
+    // Три вида определений, как в оригинале: причастия/отглагольные («эякулирующий», «обдрочившийся»),
+    // составные («мудомандапиздый»), обычные («бледный»).
     if(chance(CM_PART_P)){
       const base=choose(PARTS,used,ctx.words,diversity,ctx);
       used.add(base); ctx.words.add(base);
       return adjectiveForGender(base,g);
     }
+    if(chance(CM_ADJ_P)){
+      const raw=generatedCompoundWord('adj',ctx);
+      return compoundAdjectiveGender(sanitizeCompound(raw,'adj'),g);
+    }
     return adjectiveForGender(word(DB.adj,'adj'),g);
   };
   const A=(g,allowAdv=true)=>{
     const a=adjective(g);
-    return allowAdv && chance(.52) ? adv()+' '+a : a;
+    return allowAdv && chance(.72) ? adv()+' '+a : a;
   };
   // 0.941: в архивных примерах наречие стоит почти перед каждым вторым прилагательным в перечислении
   // («чрезмерно блядожопый, недоссанный и невероятно блядомордый»); двойные наречия отсекаются в makePhrase().
-  const A2=(g)=>{ const a=adjective(g); return chance(.30) ? adv()+' '+a : a; };
+  const A2=(g)=>{ const a=adjective(g); return chance(.60) ? adv()+' '+a : a; };
   // Управляющие существительные. Важно: роль определяется лексически,
   // а не по случайному окончанию слова. Старый вариант с regex вроде /арь|ор|щик/
   // превращал «мусор», «пылесос» и множество обычных существительных в
@@ -1611,17 +1613,17 @@ function makePhraseCore(gender, batchCtx, allowTarget=true){
   // Режимы «Мужской/Женский/Смешанный/Хаос» — параметр рода групп: в «Хаосе» род каждой группы выбирается заново.
   const wp=list=>{ let t=0; for(const e of list) t+=e[1]; let r=Math.random()*t; for(const e of list){ r-=e[1]; if(r<=0) return e[0]; } return list[list.length-1][0]; };
   const HEAD_W={
-    short:[['noun',.80],['role',.15],['title',.05]],
-    medium:[['noun',.56],['role',.22],['title',.12],['post',.10]],
-    long:[['noun',.44],['role',.24],['title',.20],['post',.12]]
+    short:[['noun',.66],['role',.26],['title',.08]],
+    medium:[['noun',.36],['role',.46],['title',.12],['post',.06]],
+    long:[['noun',.30],['role',.50],['title',.14],['post',.06]]
   };
-  const ADJ_W={ short:[[0,.30],[1,.70]], medium:[[1,.38],[2,.44],[3,.18]], long:[[2,.38],[3,.62]] };
-  const CLAUSE_P={short:0,medium:.32,long:.52};
+  const ADJ_W={ short:[[0,.26],[1,.74]], medium:[[1,.28],[2,.44],[3,.28]], long:[[2,.36],[3,.64]] };
+  const CLAUSE_P={short:0,medium:.28,long:.40};
   // Определения: «A», «A, A», «A A», «A, A и A»; наречия — по правилам оригинала (в A/A2 и в cmAdvInject).
   function adjChain(g,n){
     if(n<=0) return '';
     if(n===1) return A(g,true);
-    if(n===2) return chance(.72) ? `${A(g,true)}, ${A2(g)}` : `${A(g,true)} ${A2(g)}`;
+    if(n===2){ const r=Math.random(); const a=A(g,true), b=A2(g); return r<.40 ? `${a} и ${b}` : (r<.92 ? `${a}, ${b}` : `${a} ${b}`); }   // «A и A» / «A, A»
     return `${A(g,true)}, ${A2(g)} и ${A2(g)}`;
   }
   // Титул + зависимое в родительном («алигарх жоп»); только слова, реально имеющиеся в словаре.
@@ -1674,18 +1676,18 @@ function makePhraseCore(gender, batchCtx, allowTarget=true){
   // Пул рамок. t: false — без цели, true — с целью. w — вес по длине. Имя цели всегда в начале или перед «—».
   const FRAMES=[
     // — без цели —
-    {id:'np',    t:false, w:{short:.28,medium:.18,long:.10}, f:L=>np(G(),L)},                                   // «NP»
-    {id:'dash',  t:false, w:{short:.24,medium:.36,long:.42}, f:L=>{const a=G(),b=G();return `${np(a,L)} — ${np(b,L)}`;}},   // «NP — NP»
+    {id:'np',    t:false, w:{short:.30,medium:.22,long:.14}, f:L=>np(G(),L)},                                   // «NP»
+    {id:'dash',  t:false, w:{short:.16,medium:.22,long:.26}, f:L=>{const a=G(),b=G();return `${np(a,L)} — ${np(b,L)}`;}},   // «NP — NP»
     {id:'nDash', t:false, w:{short:.08,medium:.10,long:.12}, f:L=>{const a=G(),b=G();return `${tinyNoun(a)} — ${np(b,L)}`;}},// «Сраконог — NP»
-    {id:'tyNP',  t:false, w:{short:.10,medium:.22,long:.26}, f:L=>`ты ${np(G(),L)}`},                          // «ты NP»
-    {id:'ty',    t:false, w:{short:.12,medium:.04,long:0},   f:L=>`ты ${tinyNoun(G())}`},                        // «ты херомуд»
-    {id:'nA',    t:false, w:{short:.08,medium:.02,long:0},   f:L=>{const g=G();return `${tinyNoun(g)} ${adjectiveForGender(word(DB.adj,'adj'),g)}`;}},   // «свинохер тугой»
+    {id:'tyNP',  t:false, w:{short:.16,medium:.32,long:.38}, f:L=>`ты ${np(G(),L)}`},                          // «ты NP»
+    {id:'ty',    t:false, w:{short:.09,medium:.03,long:0},   f:L=>`ты ${tinyNoun(G())}`},                        // «ты херомуд»
+    {id:'nA',    t:false, w:{short:.06,medium:.02,long:0},   f:L=>{const g=G();return `${tinyNoun(g)} ${adjectiveForGender(word(DB.adj,'adj'),g)}`;}},   // «свинохер тугой»
     // — с целью (имя всегда в начале или перед «—») —
-    {id:'tTy',   t:true,  w:{short:.34,medium:.28,long:.22}, f:L=>`${target}, ты ${np(G(),L)}`},               // «Имя, ты NP»
-    {id:'tDash', t:true,  w:{short:.24,medium:.20,long:.16}, f:L=>`${target} — ${np(G(),L)}`},                  // «Имя — NP»
+    {id:'tTy',   t:true,  w:{short:.38,medium:.36,long:.32}, f:L=>`${target}, ты ${np(G(),L)}`},               // «Имя, ты NP»
+    {id:'tDash', t:true,  w:{short:.20,medium:.14,long:.10}, f:L=>`${target} — ${np(G(),L)}`},                  // «Имя — NP»
     {id:'tEpi',  t:true,  w:{short:.16,medium:.28,long:.26}, f:L=>{const a=G(),b=G();return `${np(a,L,{noClause:true})} ${target} — ${np(b,L)}`;}},   // «NP Имя — NP»
     {id:'tEpiN', t:true,  w:{short:.10,medium:.10,long:.06}, f:L=>{const a=G(),b=G();return `${tinyNoun(a)} ${target} — ${np(b,L)}`;}},   // «Агрегат Имя — NP»
-    {id:'tTiny', t:true,  w:{short:.16,medium:.04,long:0},   f:L=>{const g=G();const r=Math.random();return r<.45?`${target}, ты ${tinyNoun(g)}`:(r<.80?`${target} — ${tinyNoun(g)}`:`${target} — ${tinyNoun(g)} ${adjectiveForGender(word(DB.adj,'adj'),g)}`);}}
+    {id:'tTiny', t:true,  w:{short:.12,medium:.03,long:0},   f:L=>{const g=G();const r=Math.random();return r<.45?`${target}, ты ${tinyNoun(g)}`:(r<.80?`${target} — ${tinyNoun(g)}`:`${target} — ${tinyNoun(g)} ${adjectiveForGender(word(DB.adj,'adj'),g)}`);}}
   ];
   function buildPhrase(L){
     const pool=FRAMES.filter(x=>x.t===!!target && x.w[L]>0).map(x=>({id:x.id,w:x.w[L],f:()=>x.f(L)}));
@@ -1757,7 +1759,7 @@ function cmAdvOne(){
 function cmAdvInject(out,tg,bctx){
   const rx=cmAdvOne(); if(!rx) return out;
   const have=(out.match(rx)||[]).length;
-  const p=have===0?.82:(have===1?.50:(have===2?.12:0));
+  const p=have===0?.92:(have===1?.70:(have===2?.30:0));
   if(Math.random()>=p) return out;
   const parts=out.split(/(\s+)/);
   const nameWords=new Set(String(tg||'').toLowerCase().split(/\s+/).filter(Boolean));
